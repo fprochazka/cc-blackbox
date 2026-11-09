@@ -12,6 +12,7 @@ __all__ = [
     "AmbiguousSession",
     "AuthSwitchConfigError",
     "ClaudeBlackboxError",
+    "HookInputError",
     "MessageTooLarge",
     "MessagingError",
     "MessagingUnavailable",
@@ -37,6 +38,10 @@ class AuthSwitchConfigError(ClaudeBlackboxError):
 
 class SessionNotFound(ClaudeBlackboxError, LookupError):
     """No active session matches the query."""
+
+
+class HookInputError(ClaudeBlackboxError, ValueError):
+    """The hook payload is not a JSON object, so it cannot be a Claude Code hook input."""
 
 
 class TranscriptNotFound(ClaudeBlackboxError, LookupError):

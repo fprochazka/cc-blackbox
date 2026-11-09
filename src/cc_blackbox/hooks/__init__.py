@@ -1,0 +1,246 @@
+"""Typed Claude Code hook input, typed replies, and a runner that connects them to stdin, stdout and the exit code.
+
+A hook runs before every tool call it matches, so this package loads lazily: importing it loads almost nothing, and
+:func:`parse_hook_input` imports only the module that defines the arriving event. Everything importable from this
+package is the public API; the underscore modules are implementation details.
+
+The hook contract is documented in the Claude Code hooks reference. The parser still reads it tolerantly: an unknown
+event or field is kept in ``raw``, and a field with an unexpected type reads as ``None``.
+"""
+
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cc_blackbox.errors import (
+        HookInputError,
+    )
+    from cc_blackbox.hooks._base import (
+        KNOWN_HOOK_EVENTS,
+        Halt,
+        HookInput,
+        HookReply,
+        HookResponse,
+        PermissionDecision,
+        PermissionMode,
+        RawReply,
+        UnknownHookInput,
+        parse_hook_input,
+        read_hook_input,
+    )
+    from cc_blackbox.hooks._session_events import (
+        CompactTrigger,
+        ConfigChangeInput,
+        CwdChangedInput,
+        DirectoryAddedInput,
+        ElicitationInput,
+        ElicitationResultInput,
+        FileChangedInput,
+        InstructionsLoadedInput,
+        ModelSwitchHookInput,
+        PostCompactInput,
+        PostModelSwitchInput,
+        PreCompactInput,
+        PreModelSwitchInput,
+        SessionEndInput,
+        SessionEndReason,
+        SessionStartInput,
+        SessionStartSource,
+        SetupInput,
+        WorktreeCreateInput,
+        WorktreeRemoveInput,
+    )
+    from cc_blackbox.hooks._tool_events import (
+        BatchedToolCall,
+        McpServer,
+        PermissionDeniedInput,
+        PermissionRequestInput,
+        PostToolBatchInput,
+        PostToolUseFailureInput,
+        PostToolUseInput,
+        PreToolUseInput,
+        ToolHookInput,
+    )
+    from cc_blackbox.hooks._tool_inputs import (
+        AgentInput,
+        EditInput,
+        GlobInput,
+        GrepInput,
+        ReadInput,
+        ShellInput,
+        ToolInputView,
+        WebFetchInput,
+        WebSearchInput,
+        WriteInput,
+    )
+    from cc_blackbox.hooks._turn_events import (
+        BackgroundTask,
+        MessageDisplayInput,
+        NotificationInput,
+        SessionCron,
+        StopFailureInput,
+        StopHookInput,
+        StopInput,
+        SubagentStartInput,
+        SubagentStopInput,
+        TaskCompletedInput,
+        TaskCreatedInput,
+        TaskHookInput,
+        TeammateIdleInput,
+        UserPromptExpansionInput,
+        UserPromptSubmitInput,
+    )
+
+__all__ = [
+    "AgentInput",
+    "BackgroundTask",
+    "BatchedToolCall",
+    "CompactTrigger",
+    "ConfigChangeInput",
+    "CwdChangedInput",
+    "DirectoryAddedInput",
+    "EditInput",
+    "ElicitationInput",
+    "ElicitationResultInput",
+    "FileChangedInput",
+    "GlobInput",
+    "GrepInput",
+    "Halt",
+    "HookInput",
+    "HookInputError",
+    "HookReply",
+    "HookResponse",
+    "InstructionsLoadedInput",
+    "KNOWN_HOOK_EVENTS",
+    "McpServer",
+    "MessageDisplayInput",
+    "ModelSwitchHookInput",
+    "NotificationInput",
+    "PermissionDecision",
+    "PermissionDeniedInput",
+    "PermissionMode",
+    "PermissionRequestInput",
+    "PostCompactInput",
+    "PostModelSwitchInput",
+    "PostToolBatchInput",
+    "PostToolUseFailureInput",
+    "PostToolUseInput",
+    "PreCompactInput",
+    "PreModelSwitchInput",
+    "PreToolUseInput",
+    "RawReply",
+    "ReadInput",
+    "SessionCron",
+    "SessionEndInput",
+    "SessionEndReason",
+    "SessionStartInput",
+    "SessionStartSource",
+    "SetupInput",
+    "ShellInput",
+    "StopFailureInput",
+    "StopHookInput",
+    "StopInput",
+    "SubagentStartInput",
+    "SubagentStopInput",
+    "TaskCompletedInput",
+    "TaskCreatedInput",
+    "TaskHookInput",
+    "TeammateIdleInput",
+    "ToolHookInput",
+    "ToolInputView",
+    "UnknownHookInput",
+    "UserPromptExpansionInput",
+    "UserPromptSubmitInput",
+    "WebFetchInput",
+    "WebSearchInput",
+    "WorktreeCreateInput",
+    "WorktreeRemoveInput",
+    "WriteInput",
+    "parse_hook_input",
+    "read_hook_input",
+]
+
+_EXPORTS: dict[str, str] = {
+    "HookInputError": "cc_blackbox.errors",
+    "Halt": "cc_blackbox.hooks._base",
+    "HookInput": "cc_blackbox.hooks._base",
+    "HookReply": "cc_blackbox.hooks._base",
+    "HookResponse": "cc_blackbox.hooks._base",
+    "KNOWN_HOOK_EVENTS": "cc_blackbox.hooks._base",
+    "PermissionDecision": "cc_blackbox.hooks._base",
+    "PermissionMode": "cc_blackbox.hooks._base",
+    "RawReply": "cc_blackbox.hooks._base",
+    "UnknownHookInput": "cc_blackbox.hooks._base",
+    "parse_hook_input": "cc_blackbox.hooks._base",
+    "read_hook_input": "cc_blackbox.hooks._base",
+    "CompactTrigger": "cc_blackbox.hooks._session_events",
+    "ConfigChangeInput": "cc_blackbox.hooks._session_events",
+    "CwdChangedInput": "cc_blackbox.hooks._session_events",
+    "DirectoryAddedInput": "cc_blackbox.hooks._session_events",
+    "ElicitationInput": "cc_blackbox.hooks._session_events",
+    "ElicitationResultInput": "cc_blackbox.hooks._session_events",
+    "FileChangedInput": "cc_blackbox.hooks._session_events",
+    "InstructionsLoadedInput": "cc_blackbox.hooks._session_events",
+    "ModelSwitchHookInput": "cc_blackbox.hooks._session_events",
+    "PostCompactInput": "cc_blackbox.hooks._session_events",
+    "PostModelSwitchInput": "cc_blackbox.hooks._session_events",
+    "PreCompactInput": "cc_blackbox.hooks._session_events",
+    "PreModelSwitchInput": "cc_blackbox.hooks._session_events",
+    "SessionEndInput": "cc_blackbox.hooks._session_events",
+    "SessionEndReason": "cc_blackbox.hooks._session_events",
+    "SessionStartInput": "cc_blackbox.hooks._session_events",
+    "SessionStartSource": "cc_blackbox.hooks._session_events",
+    "SetupInput": "cc_blackbox.hooks._session_events",
+    "WorktreeCreateInput": "cc_blackbox.hooks._session_events",
+    "WorktreeRemoveInput": "cc_blackbox.hooks._session_events",
+    "BatchedToolCall": "cc_blackbox.hooks._tool_events",
+    "McpServer": "cc_blackbox.hooks._tool_events",
+    "PermissionDeniedInput": "cc_blackbox.hooks._tool_events",
+    "PermissionRequestInput": "cc_blackbox.hooks._tool_events",
+    "PostToolBatchInput": "cc_blackbox.hooks._tool_events",
+    "PostToolUseFailureInput": "cc_blackbox.hooks._tool_events",
+    "PostToolUseInput": "cc_blackbox.hooks._tool_events",
+    "PreToolUseInput": "cc_blackbox.hooks._tool_events",
+    "ToolHookInput": "cc_blackbox.hooks._tool_events",
+    "AgentInput": "cc_blackbox.hooks._tool_inputs",
+    "EditInput": "cc_blackbox.hooks._tool_inputs",
+    "GlobInput": "cc_blackbox.hooks._tool_inputs",
+    "GrepInput": "cc_blackbox.hooks._tool_inputs",
+    "ReadInput": "cc_blackbox.hooks._tool_inputs",
+    "ShellInput": "cc_blackbox.hooks._tool_inputs",
+    "ToolInputView": "cc_blackbox.hooks._tool_inputs",
+    "WebFetchInput": "cc_blackbox.hooks._tool_inputs",
+    "WebSearchInput": "cc_blackbox.hooks._tool_inputs",
+    "WriteInput": "cc_blackbox.hooks._tool_inputs",
+    "BackgroundTask": "cc_blackbox.hooks._turn_events",
+    "MessageDisplayInput": "cc_blackbox.hooks._turn_events",
+    "NotificationInput": "cc_blackbox.hooks._turn_events",
+    "SessionCron": "cc_blackbox.hooks._turn_events",
+    "StopFailureInput": "cc_blackbox.hooks._turn_events",
+    "StopHookInput": "cc_blackbox.hooks._turn_events",
+    "StopInput": "cc_blackbox.hooks._turn_events",
+    "SubagentStartInput": "cc_blackbox.hooks._turn_events",
+    "SubagentStopInput": "cc_blackbox.hooks._turn_events",
+    "TaskCompletedInput": "cc_blackbox.hooks._turn_events",
+    "TaskCreatedInput": "cc_blackbox.hooks._turn_events",
+    "TaskHookInput": "cc_blackbox.hooks._turn_events",
+    "TeammateIdleInput": "cc_blackbox.hooks._turn_events",
+    "UserPromptExpansionInput": "cc_blackbox.hooks._turn_events",
+    "UserPromptSubmitInput": "cc_blackbox.hooks._turn_events",
+}
+
+if not TYPE_CHECKING:
+    # Hidden from type checkers, as in the cc_blackbox package: see the comment there.
+
+    def __getattr__(name: str) -> Any:
+        module = _EXPORTS.get(name)
+        if module is None:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        value = getattr(importlib.import_module(module), name)
+        globals()[name] = value
+        return value
+
+    def __dir__() -> list[str]:
+        return sorted(set(globals()) | set(__all__))
