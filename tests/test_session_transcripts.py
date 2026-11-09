@@ -26,6 +26,7 @@ from cc_blackbox import (
     UserEntry,
     active_session_for,
     find_session_transcript,
+    list_profiles,
     list_session_transcripts,
     read_session_transcript,
     transcript_for,
@@ -198,6 +199,31 @@ def test_find_and_read_a_transcript(projects: Path) -> None:
     assert [p.name for p in read.projects_dir.profiles] == ["default"]
     with pytest.raises(TranscriptNotFound):
         read_session_transcript(path.with_name("missing.jsonl"))
+
+
+def test_a_cwd_hint_checks_its_project_dirs_first_and_falls_back_to_the_scan(projects: Path, tmp_path: Path) -> None:
+    real = (tmp_path / "real" / "repo").resolve()
+    real.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real.parent)
+    hinted = write_transcript(projects, conversation(), cwd=str(real))
+    # The same session id under a project dir that sorts first, as after a resume from another dir.
+    elsewhere = write_transcript(projects, conversation(), cwd="/a")
+
+    assert find_session_transcript(SESSION_ID).path == elsewhere
+    assert find_session_transcript(SESSION_ID, cwd=tmp_path / "link" / "repo").path == hinted
+    assert find_session_transcript(SESSION_ID, cwd="/no/such/dir").path == elsewhere
+    with pytest.raises(TranscriptNotFound):
+        find_session_transcript(OTHER_SESSION_ID, cwd=real)
+
+
+def test_a_lookup_scoped_to_one_config_dir_keeps_its_profile(tmp_path: Path) -> None:
+    config_dir = make_profile_dir(tmp_path / "unlisted")
+    path = write_transcript(config_dir / "projects", conversation())
+
+    found = find_session_transcript(SESSION_ID, list_profiles([config_dir]), cwd=CWD)
+
+    assert found.path == path.resolve()
+    assert [p.config_dir for p in found.projects_dir.profiles] == [config_dir.resolve()]
 
 
 def test_subagents_and_sidecar_files(projects: Path) -> None:

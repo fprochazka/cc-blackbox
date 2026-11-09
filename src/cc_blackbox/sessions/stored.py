@@ -22,6 +22,7 @@ from cc_blackbox.transcripts.layout import (
     is_session_file_name,
     is_session_id,
     list_projects_dirs,
+    project_dirs_for,
 )
 from cc_blackbox.transcripts.prompts import prompt_from
 from cc_blackbox.transcripts.reader import iter_entries
@@ -357,8 +358,18 @@ def find_session_transcript(
     profiles: Iterable[str | ClaudeProfile] | None = None,
     *,
     projects_dirs: Iterable[str | os.PathLike[str]] | None = None,
+    cwd: str | os.PathLike[str] | None = None,
 ) -> SessionTranscript:
     """Find the main transcript of ``session_id`` in the projects dirs of ``profiles``, whatever dir it was launched in.
+
+    ``profiles`` and ``projects_dirs`` select the projects dirs as in :func:`~cc_blackbox.list_projects_dirs`. To
+    search one profile, pass ``[profile]`` or its name. To search a config dir that no listed profile uses, pass
+    ``list_profiles([config_dir])``, which keeps the profile on :attr:`SessionTranscript.projects_dir`.
+
+    Without ``cwd``, every project dir is checked for the file. ``cwd`` is a hint, the dir the session was most likely
+    launched in: its project dirs from :func:`~cc_blackbox.project_dirs_for` are checked first, and the rest only when
+    they do not hold the session. A shared projects dir can have thousands of project dirs, so the hint saves a stat
+    of each.
 
     The path is never derived from a registry record's ``cwd``, which changes when a session enters a worktree.
 
@@ -369,6 +380,12 @@ def find_session_transcript(
     if not is_session_id(session_id):
         raise TranscriptNotFound(f"{session_id!r} is not a session id. A session id is a UUID.")
     searched = list_projects_dirs(profiles, paths=projects_dirs)
+    if cwd is not None:
+        by_path = {d.path: d for d in searched}
+        for project in project_dirs_for(cwd, projects_dirs=by_path):
+            candidate = project / f"{session_id}.jsonl"
+            if candidate.is_file():
+                return _summarize(candidate, by_path[project.parent])
     for projects_dir in searched:
         for project in _project_dirs(projects_dir):
             candidate = project / f"{session_id}.jsonl"
