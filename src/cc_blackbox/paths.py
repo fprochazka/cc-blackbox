@@ -19,6 +19,7 @@ __all__ = [
     "node_tmpdir",
     "project_slug",
     "scratchpad_dir",
+    "untruncated_slug",
 ]
 
 _SLUG_MAX_LENGTH = 200
@@ -64,6 +65,15 @@ def _base36(value: int) -> str:
     return "".join(reversed(out))
 
 
+def untruncated_slug(cwd: str | os.PathLike[str]) -> str:
+    """Return :func:`project_slug` of ``cwd`` before it is cut to 200 characters.
+
+    A dir under ``cwd`` has a slug that starts with this one, followed by ``-``. That holds for the first 200
+    characters of a cut slug too, which is what lets a caller find the project dirs under a directory by name.
+    """
+    return "".join("-" * (len(ch.encode("utf-16-le")) // 2) if _NON_ALNUM.match(ch) else ch for ch in os.fspath(cwd))
+
+
 def project_slug(cwd: str | os.PathLike[str]) -> str:
     """Return the directory name Claude Code uses for ``cwd`` under ``projects/`` and in the scratchpad path.
 
@@ -72,7 +82,7 @@ def project_slug(cwd: str | os.PathLike[str]) -> str:
     200 and gets ``-`` plus the base-36 absolute value of the Java ``String.hashCode`` of the original path.
     """
     path = os.fspath(cwd)
-    slug = "".join("-" * (len(ch.encode("utf-16-le")) // 2) if _NON_ALNUM.match(ch) else ch for ch in path)
+    slug = untruncated_slug(path)
     if len(slug) <= _SLUG_MAX_LENGTH:
         return slug
     return f"{slug[:_SLUG_MAX_LENGTH]}-{_base36(abs(_java_string_hash(path)))}"

@@ -18,6 +18,7 @@ __all__ = [
     "ProfileNotFound",
     "SessionGone",
     "SessionNotFound",
+    "TranscriptNotFound",
     "UnsupportedProtocol",
 ]
 
@@ -36,6 +37,10 @@ class AuthSwitchConfigError(ClaudeBlackboxError):
 
 class SessionNotFound(ClaudeBlackboxError, LookupError):
     """No active session matches the query."""
+
+
+class TranscriptNotFound(ClaudeBlackboxError, LookupError):
+    """No transcript matches the session id or path."""
 
 
 class AmbiguousSession(ClaudeBlackboxError, LookupError):
