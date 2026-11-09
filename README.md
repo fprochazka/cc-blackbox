@@ -23,7 +23,7 @@ To use changes that are not released to PyPI yet, pin a tag of this repository a
 dependencies = ["cc-blackbox"]
 
 [tool.uv.sources]
-cc-blackbox = { git = "https://github.com/fprochazka/cc-blackbox", tag = "v0.3.0" }
+cc-blackbox = { git = "https://github.com/fprochazka/cc-blackbox", tag = "v0.4.0" }
 ```
 
 ## Usage
@@ -177,7 +177,7 @@ New record fields and new peer features are additions and do not count against a
 
 Transcripts carry no protocol number, so their check looks at the records. Pass a `ReadDiagnostics` to `iter_entries()`: `aligned` is `False` only when a field the library models, such as `message.content`, has an unexpected type. Malformed lines, unknown record types and unknown content blocks are counted but never raise and never count against alignment, because Claude Code adds record types every few releases.
 
-`TESTED_CLAUDE_CODE_VERSIONS` lists the Claude Code versions that the [live contract test](#live-contract-test) passed against: 2.1.319. It is information only.
+`TESTED_CLAUDE_CODE_VERSIONS` lists the Claude Code versions that the [live contract test](#live-contract-test) passed against: 2.1.319 and 2.1.321. It is information only.
 
 ### Platform support
 

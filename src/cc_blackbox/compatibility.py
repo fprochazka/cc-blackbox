@@ -28,7 +28,7 @@ __all__ = [
 SUPPORTED_PEER_PROTOCOLS: frozenset[int] = frozenset({1})
 """The ``peerProtocol`` values whose message frames this package can write."""
 
-TESTED_CLAUDE_CODE_VERSIONS: tuple[str, ...] = ("2.1.319",)
+TESTED_CLAUDE_CODE_VERSIONS: tuple[str, ...] = ("2.1.319", "2.1.321")
 """The Claude Code versions the live contract test passed against. Informational only: nothing compares versions."""
 
 CompatibilityFeature = Literal["messaging", "scratchpad", "liveness"]

@@ -50,7 +50,7 @@ def test_newer_claude_code_with_additions_is_compatible(home: Path) -> None:
         status="a-new-status",
     )
     assert session_from(home, record).compatibility.compatible
-    assert TESTED_CLAUDE_CODE_VERSIONS == ("2.1.319",)
+    assert TESTED_CLAUDE_CODE_VERSIONS == ("2.1.319", "2.1.321")
 
 
 def test_record_without_version_is_compatible(home: Path) -> None:

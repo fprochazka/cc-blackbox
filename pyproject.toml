@@ -1,7 +1,7 @@
 [project]
 name = "cc-blackbox"
-version = "0.3.0"
-description = "Unofficial, not affiliated with or endorsed by Anthropic: typed Python access to Claude Code (cc), its profiles, sessions, transcripts and messaging, through undocumented internals that can change in any release"
+version = "0.4.0"
+description = "Unofficial, not affiliated with or endorsed by Anthropic: typed Python access to Claude Code (cc), its profiles, sessions, transcripts and messaging, through undocumented internals that can change in any release, and typed hook input and replies"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -9,7 +9,7 @@ authors = [
     { name = "Filip Procházka", email = "mr@fprochazka.cz" }
 ]
 requires-python = ">=3.11"
-keywords = ["claude-code", "claude", "session", "transcript", "messaging", "sdk"]
+keywords = ["claude-code", "claude", "session", "transcript", "messaging", "hooks", "sdk"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
