@@ -29,16 +29,9 @@ PermissionDecision: TypeAlias = Literal["allow", "deny", "ask", "defer"]
 
 EVENT_MODULES: Mapping[str, str] = MappingProxyType(
     {
+        **dict.fromkeys(["PreToolUse", "PostToolUse", "PostToolUseFailure"], "cc_blackbox.hooks._tool_events"),
         **dict.fromkeys(
-            [
-                "PreToolUse",
-                "PermissionRequest",
-                "PermissionDenied",
-                "PostToolUse",
-                "PostToolUseFailure",
-                "PostToolBatch",
-            ],
-            "cc_blackbox.hooks._tool_events",
+            ["PermissionRequest", "PermissionDenied", "PostToolBatch"], "cc_blackbox.hooks._rare_tool_events"
         ),
         **dict.fromkeys(
             [

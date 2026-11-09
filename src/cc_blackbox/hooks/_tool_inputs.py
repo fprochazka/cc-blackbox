@@ -7,8 +7,36 @@ A view is a convenience over ``tool_input``, which always stays available. Impor
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Any, TypeAlias
+
+
+class _View:
+    """A read-only record with value equality. Plain ``__slots__`` classes instead of dataclasses, because a
+    dataclass costs about 0.3 ms to create and a hook pays that before every tool call."""
+
+    __slots__: tuple[str, ...] = ()
+
+    def __init__(self, **fields: Any) -> None:
+        for name in self.__slots__:
+            object.__setattr__(self, name, fields.pop(name, None))
+        if fields:
+            raise TypeError(f"{type(self).__name__} has no field {next(iter(fields))!r}.")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"{type(self).__name__} is read-only.")
+
+    def _values(self) -> tuple[Any, ...]:
+        return tuple(getattr(self, name) for name in self.__slots__)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _View) and type(other) is type(self) and other._values() == self._values()
+
+    def __hash__(self) -> int:
+        return hash((type(self), self._values()))
+
+    def __repr__(self) -> str:
+        fields = ", ".join(f"{name}={getattr(self, name)!r}" for name in self.__slots__)
+        return f"{type(self).__name__}({fields})"
 
 
 def _text(data: Mapping[str, Any], key: str) -> str | None:
@@ -31,9 +59,10 @@ def _strings(data: Mapping[str, Any], key: str) -> tuple[str, ...] | None:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, list) else None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ShellInput:
+class ShellInput(_View):
     """The input of ``Bash`` and ``PowerShell``, which share their fields."""
+
+    __slots__ = ("command", "description", "timeout_ms", "run_in_background")
 
     command: str
     description: str | None
@@ -41,23 +70,26 @@ class ShellInput:
     run_in_background: bool | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ReadInput:
+class ReadInput(_View):
+    __slots__ = ("file_path", "offset", "limit")
+
     file_path: str
     """Absolute; Claude Code expands ``~`` and relative paths before hooks run. Backslashes on Windows."""
     offset: int | None
     limit: int | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class WriteInput:
+class WriteInput(_View):
+    __slots__ = ("file_path", "content")
+
     file_path: str
     """Absolute, as for :class:`ReadInput`."""
     content: str | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class EditInput:
+class EditInput(_View):
+    __slots__ = ("file_path", "old_string", "new_string", "replace_all")
+
     file_path: str
     """Absolute, as for :class:`ReadInput`."""
     old_string: str | None
@@ -65,14 +97,16 @@ class EditInput:
     replace_all: bool | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class GlobInput:
+class GlobInput(_View):
+    __slots__ = ("pattern", "path")
+
     pattern: str
     path: str | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class GrepInput:
+class GrepInput(_View):
+    __slots__ = ("pattern", "path", "glob", "output_mode", "case_insensitive", "multiline")
+
     pattern: str
     path: str | None
     glob: str | None
@@ -82,23 +116,26 @@ class GrepInput:
     multiline: bool | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class WebFetchInput:
+class WebFetchInput(_View):
+    __slots__ = ("url", "prompt", "offset")
+
     url: str
     prompt: str | None
     offset: int | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class WebSearchInput:
+class WebSearchInput(_View):
+    __slots__ = ("query", "allowed_domains", "blocked_domains", "mode")
+
     query: str
     allowed_domains: tuple[str, ...] | None
     blocked_domains: tuple[str, ...] | None
     mode: str | None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class AgentInput:
+class AgentInput(_View):
+    __slots__ = ("prompt", "description", "subagent_type", "model")
+
     prompt: str
     description: str | None
     subagent_type: str | None

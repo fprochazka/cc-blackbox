@@ -57,9 +57,10 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not live'"
+addopts = "-m 'not live and not perf'"
 markers = [
     "live: starts a real headless Claude Code session and spends model usage; run with `pytest -m live -s`",
+    "perf: measures wall-clock time against a stdlib baseline; run before a release with `pytest -m perf -s`",
 ]
 
 [dependency-groups]

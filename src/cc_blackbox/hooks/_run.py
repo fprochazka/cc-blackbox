@@ -167,11 +167,11 @@ def _failure_reply(event_name: str | None, policy: FailurePolicy, message: str) 
         model = _session_events.PreModelSwitchReply
         return model.ask(message) if policy == "ask" else model.deny(message)
     if event_name in ("PermissionRequest", "PostToolBatch"):
-        from cc_blackbox.hooks import _tool_events
+        from cc_blackbox.hooks import _rare_tool_events
 
         if event_name == "PermissionRequest":
-            return _tool_events.PermissionRequestReply.deny(message)
-        return _tool_events.PostToolBatchReply.block(message)
+            return _rare_tool_events.PermissionRequestReply.deny(message)
+        return _rare_tool_events.PostToolBatchReply.block(message)
     if event_name in ("UserPromptSubmit", "UserPromptExpansion", "TaskCreated"):
         from cc_blackbox.hooks import _turn_events
 
