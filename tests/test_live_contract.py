@@ -1,8 +1,8 @@
 """The live contract test: start a real headless Claude Code session and message it through cc-blackbox.
 
 It is excluded from the default run and from CI. Run it with ``uv run pytest -m live -s`` after a Claude Code update
-to confirm that the registry record and the messaging protocol are still aligned. It needs the ``claude`` CLI on PATH,
-logged in, and it spends a little model usage: two short turns on the cheapest model.
+to confirm that the registry record, the messaging protocol and the transcript records are still aligned. It needs the
+``claude`` CLI on PATH, logged in, and it spends a little model usage: two short turns on the cheapest model.
 """
 
 from __future__ import annotations
@@ -21,7 +21,17 @@ from typing import IO, Any
 
 import pytest
 
-from cc_blackbox import ActiveSession, check_compatibility, current_profile, list_active_sessions, send_message
+from cc_blackbox import (
+    ActiveSession,
+    ReadDiagnostics,
+    assistant_texts,
+    check_compatibility,
+    current_profile,
+    list_active_sessions,
+    prompts,
+    send_message,
+    transcript_for,
+)
 from cc_blackbox.paths import env_config_dir, project_slug
 
 pytestmark = pytest.mark.live
@@ -159,9 +169,22 @@ def test_headless_session_receives_a_message(workdir: Path) -> None:
         results = reader.wait_for_results(2, REPLY_TIMEOUT)
 
         assert session.session_id is not None and session.cwd is not None
-        transcript = session.profile.projects_dir / project_slug(session.cwd) / f"{session.session_id}.jsonl"
-        assert marker in transcript.read_text(encoding="utf-8"), f"the transcript {transcript} lacks the marker"
+        expected = session.profile.projects_dir / project_slug(session.cwd) / f"{session.session_id}.jsonl"
+        transcript = transcript_for(session)
+        assert transcript is not None, f"no transcript found for session {session.session_id}, expected {expected}"
+        # Profiles often share one projects dir through a symlink; a listing reports the resolved path.
+        assert transcript.path == expected.resolve()
         assert marker in json.dumps(results[1]), f"the session did not repeat the marker: {results[1]}"
+
+        # The transcript side of the contract: the records still have the shapes the reader models, the peer message
+        # is a prompt that says who sent it, and the reply is assistant text.
+        diagnostics = ReadDiagnostics()
+        entries = list(transcript.entries(diagnostics=diagnostics))
+        assert diagnostics.aligned, f"unexpected record shapes: {dict(diagnostics.mistyped_fields)}"
+        delivered = [p for p in prompts(entries) if marker in p.text]
+        assert [p.origin for p in delivered] == ["peer"], f"the marker prompt is {delivered}"
+        assert any(marker in t.text for t in assistant_texts(entries)), "no assistant text repeats the marker"
+        assert transcript.cwd == session.cwd and transcript.last_activity_at is not None
 
         def total(key: str) -> int:
             return sum(int((r.get("usage") or {}).get(key) or 0) for r in results)
@@ -171,7 +194,9 @@ def test_headless_session_receives_a_message(workdir: Path) -> None:
             f"\nlive contract: Claude Code {session.version}, model {MODEL}, {time.monotonic() - started:.1f} s, "
             f"total_cost_usd per result {costs}, tokens: {total('input_tokens')} input, "
             f"{total('cache_creation_input_tokens')} cache write, {total('cache_read_input_tokens')} cache read, "
-            f"{total('output_tokens')} output"
+            f"{total('output_tokens')} output. Transcript: {diagnostics.lines} records, "
+            f"unknown types {dict(diagnostics.unknown_types) or 'none'}, "
+            f"unknown blocks {dict(diagnostics.unknown_block_types) or 'none'}"
         )
     finally:
         process.stdin.close()
