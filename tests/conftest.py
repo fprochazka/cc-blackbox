@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 # Variables a Claude Code session exports to its children. Tests often run inside such a session, so every test
-# starts without them and with an empty home dir.
+# except the live contract test starts without them and with an empty home dir.
 _SESSION_ENV = (
     "CLAUDE_CONFIG_DIR",
     "FP_CC_AUTH_SWITCH_PROFILE",
@@ -18,7 +18,9 @@ _SESSION_ENV = (
 
 
 @pytest.fixture(autouse=True)
-def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def home(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    if request.node.get_closest_marker("live") is not None:
+        return Path.home()  # the live contract test runs against the real Claude Code setup
     for name in _SESSION_ENV:
         monkeypatch.delenv(name, raising=False)
     home = tmp_path / "home"

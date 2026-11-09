@@ -105,7 +105,7 @@ cc-blackbox has its own version numbers and never compares Claude Code versions.
 
 New record fields and new peer features are additions and do not count against a session. `send_message()` raises `UnsupportedProtocol`, with the reasons, only when `messaging` is not aligned. Nothing else warns.
 
-`TESTED_CLAUDE_CODE_VERSIONS` lists the Claude Code versions this release was tested against: 2.1.319. It is information only.
+`TESTED_CLAUDE_CODE_VERSIONS` lists the Claude Code versions that the [live contract test](#live-contract-test) passed against: 2.1.319. It is information only.
 
 ### Platform support
 
@@ -124,6 +124,20 @@ uv run pytest
 ```
 
 The tests build config dirs with anonymised session records in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code.
+
+### Live contract test
+
+The live contract test checks that the installed Claude Code still matches what cc-blackbox expects. Run it after a Claude Code update, and add the version to `TESTED_CLAUDE_CODE_VERSIONS` when it passes:
+
+```shell
+uv run pytest -m live -s
+```
+
+The test starts a headless session with `claude -p` in a temporary directory and a socket path of its own, using the profile in your `CLAUDE_CONFIG_DIR`. It waits for the session's registry record, checks `check_compatibility()`, sends a marker message, and checks that the marker is in the session's transcript and in its reply. Then it stops the session and deletes the transcript.
+
+- It needs the `claude` CLI on `PATH`, logged in.
+- It spends model usage: two short turns on `haiku`. Set `CC_BLACKBOX_LIVE_MODEL` to use another model.
+- The default `pytest` run and CI skip it.
 
 ## License
 

@@ -57,6 +57,10 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = [
+    "live: starts a real headless Claude Code session and spends model usage; run with `pytest -m live -s`",
+]
 
 [dependency-groups]
 dev = [
