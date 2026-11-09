@@ -10,7 +10,13 @@ Claude Code does not document any of this. The library reads the files Claude Co
 
 ## Install
 
-The package is not on PyPI. Pin a tag of this repository as a git dependency:
+```shell
+uv add cc-blackbox
+```
+
+or `pip install cc-blackbox`. It needs Python 3.11 or newer and depends only on PyYAML.
+
+To use changes that are not released to PyPI yet, pin a tag of this repository as a git source:
 
 ```toml
 [project]
@@ -19,8 +25,6 @@ dependencies = ["cc-blackbox"]
 [tool.uv.sources]
 cc-blackbox = { git = "https://github.com/fprochazka/cc-blackbox", tag = "v0.2.0" }
 ```
-
-It needs Python 3.11 or newer and depends only on PyYAML.
 
 ## Usage
 
