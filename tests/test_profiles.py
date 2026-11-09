@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_code_blackbox import (
+from cc_blackbox import (
     AuthSwitchConfigError,
     ClaudeProfile,
     ProfileNotFound,

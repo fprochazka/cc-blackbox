@@ -8,8 +8,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from claude_code_blackbox.errors import MessagingUnavailable, UnsupportedProtocol
-from claude_code_blackbox.messaging.protocol import (
+from cc_blackbox.errors import MessagingUnavailable, UnsupportedProtocol
+from cc_blackbox.messaging.protocol import (
     Priority,
     build_envelope,
     build_rename_frame,
@@ -17,8 +17,8 @@ from claude_code_blackbox.messaging.protocol import (
     encode_frame,
     percent_encode_address,
 )
-from claude_code_blackbox.messaging.transport import default_transport
-from claude_code_blackbox.sessions.active import SUPPORTED_PEER_PROTOCOL, ActiveSession
+from cc_blackbox.messaging.transport import default_transport
+from cc_blackbox.sessions.active import SUPPORTED_PEER_PROTOCOL, ActiveSession
 
 __all__ = [
     "MessagingTarget",

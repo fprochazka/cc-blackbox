@@ -11,7 +11,7 @@ import unicodedata
 import uuid
 from typing import Any, Literal
 
-from claude_code_blackbox.errors import MessageTooLarge
+from cc_blackbox.errors import MessageTooLarge
 
 __all__ = [
     "ENVELOPE_TAG",

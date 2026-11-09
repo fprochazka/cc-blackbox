@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from claude_code_blackbox.sessions.liveness import own_pid_domain
+from cc_blackbox.sessions.liveness import own_pid_domain
 
 SAMPLE_RECORD: dict[str, Any] = {
     "pid": 0,

@@ -14,11 +14,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
-from claude_code_blackbox.errors import AmbiguousSession, SessionNotFound
-from claude_code_blackbox.paths import node_tmpdir, scratchpad_dir
-from claude_code_blackbox.profiles import ClaudeProfile, current_profile, get_profile, list_profiles
-from claude_code_blackbox.sessions.liveness import is_session_process_alive
-from claude_code_blackbox.sessions.registry import RecordFile, read_records
+from cc_blackbox.errors import AmbiguousSession, SessionNotFound
+from cc_blackbox.paths import node_tmpdir, scratchpad_dir
+from cc_blackbox.profiles import ClaudeProfile, current_profile, get_profile, list_profiles
+from cc_blackbox.sessions.liveness import is_session_process_alive
+from cc_blackbox.sessions.registry import RecordFile, read_records
 
 __all__ = [
     "ActiveSession",

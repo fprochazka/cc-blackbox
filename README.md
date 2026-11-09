@@ -1,4 +1,4 @@
-# claude-code-blackbox-sdk
+# cc-blackbox
 
 A typed Python library for tools that work next to a running [Claude Code](https://code.claude.com): find the Claude Code profiles on the machine, list the sessions that run under them, and send a message into one of them.
 
@@ -12,10 +12,10 @@ The package is not on PyPI. Pin a tag of this repository as a git dependency:
 
 ```toml
 [project]
-dependencies = ["claude-code-blackbox-sdk"]
+dependencies = ["cc-blackbox"]
 
 [tool.uv.sources]
-claude-code-blackbox-sdk = { git = "https://github.com/fprochazka/claude-code-blackbox-sdk", tag = "v0.1.0" }
+cc-blackbox = { git = "https://github.com/fprochazka/claude-code-blackbox-sdk", tag = "v0.1.0" }
 ```
 
 It needs Python 3.11 or newer and depends only on PyYAML.
@@ -25,7 +25,7 @@ It needs Python 3.11 or newer and depends only on PyYAML.
 List the profiles, list the sessions that run under them, pick one and send it a message:
 
 ```python
-from claude_code_blackbox import find_session, list_active_sessions, list_profiles, send_message
+from cc_blackbox import find_session, list_active_sessions, list_profiles, send_message
 
 for profile in list_profiles():
     print(profile.name, profile.source, profile.config_dir)
@@ -46,7 +46,7 @@ send_message(
 A tool started from inside a session, directly or from one of its subagents, finds that session without any arguments:
 
 ```python
-from claude_code_blackbox import RateLimitedSender, current_session
+from cc_blackbox import RateLimitedSender, current_session
 
 session = current_session()
 if session is not None:

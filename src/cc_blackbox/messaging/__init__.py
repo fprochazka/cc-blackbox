@@ -1,13 +1,13 @@
 """Claude Code's cross-session messaging: frames, transports and the sending API."""
 
-from claude_code_blackbox.messaging.client import (
+from cc_blackbox.messaging.client import (
     MessagingTarget,
     RateLimitedSender,
     SentMessage,
     rename_session,
     send_message,
 )
-from claude_code_blackbox.messaging.protocol import Priority, build_envelope, percent_encode_address
+from cc_blackbox.messaging.protocol import Priority, build_envelope, percent_encode_address
 
 __all__ = [
     "MessagingTarget",

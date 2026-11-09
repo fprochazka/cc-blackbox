@@ -1,6 +1,6 @@
 """Running Claude Code sessions: the registry, liveness checks and lookups."""
 
-from claude_code_blackbox.sessions.active import (
+from cc_blackbox.sessions.active import (
     ActiveSession,
     SessionKind,
     SessionStatus,

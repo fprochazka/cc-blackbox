@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from claude_code_blackbox.sessions.active import ActiveSession
+    from cc_blackbox.sessions.active import ActiveSession
 
 __all__ = [
     "AmbiguousSession",

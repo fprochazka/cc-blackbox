@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from records import SAMPLE_RECORD, write_record
 
-from claude_code_blackbox import (
+from cc_blackbox import (
     ActiveSession,
     MessageTooLarge,
     MessagingUnavailable,
@@ -26,8 +26,8 @@ from claude_code_blackbox import (
     rename_session,
     send_message,
 )
-from claude_code_blackbox.messaging.protocol import MAX_LINE_LENGTH, build_user_frame, encode_frame
-from claude_code_blackbox.messaging.transport import WindowsPipeTransport
+from cc_blackbox.messaging.protocol import MAX_LINE_LENGTH, build_user_frame, encode_frame
+from cc_blackbox.messaging.transport import WindowsPipeTransport
 
 MSG_ID = "3f2b8c1e-5a6d-4e7f-8a9b-0c1d2e3f4a5b"
 ELLIPSIS = "\N{HORIZONTAL ELLIPSIS}"
@@ -346,6 +346,6 @@ def test_rate_limited_sender_checks_the_target_before_queueing(home: Path) -> No
 
 
 def test_messaging_is_unavailable_on_windows(monkeypatch: pytest.MonkeyPatch, socket_dir: Path) -> None:
-    monkeypatch.setattr("claude_code_blackbox.messaging.transport.sys.platform", "win32")
+    monkeypatch.setattr("cc_blackbox.messaging.transport.sys.platform", "win32")
     with pytest.raises(MessagingUnavailable):
         send_message(socket_dir / "x.sock", "hi", sender="w")

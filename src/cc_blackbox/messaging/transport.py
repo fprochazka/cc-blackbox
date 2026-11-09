@@ -7,7 +7,7 @@ import socket
 import sys
 from typing import Protocol
 
-from claude_code_blackbox.errors import MessagingError, MessagingUnavailable, SessionGone
+from cc_blackbox.errors import MessagingError, MessagingUnavailable, SessionGone
 
 __all__ = [
     "Transport",

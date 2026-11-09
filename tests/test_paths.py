@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_code_blackbox import claude_tmp_root, project_slug, scratchpad_dir
-from claude_code_blackbox.paths import default_config_dir, env_config_dir, node_tmpdir
+from cc_blackbox import claude_tmp_root, project_slug, scratchpad_dir
+from cc_blackbox.paths import default_config_dir, env_config_dir, node_tmpdir
 
 # The expected slugs below were produced by running Claude Code's own slug function under Node.
 

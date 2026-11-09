@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from records import SAMPLE_RECORD, dead_pid, live_record, make_profile_dir, write_record
 
-from claude_code_blackbox import (
+from cc_blackbox import (
     ActiveSession,
     AmbiguousSession,
     ClaudeProfile,

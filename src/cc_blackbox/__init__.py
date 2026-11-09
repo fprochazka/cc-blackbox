@@ -3,7 +3,7 @@
 Everything importable from this package is the public API. Submodules are implementation details.
 """
 
-from claude_code_blackbox.errors import (
+from cc_blackbox.errors import (
     AmbiguousSession,
     AuthSwitchConfigError,
     ClaudeBlackboxError,
@@ -15,7 +15,7 @@ from claude_code_blackbox.errors import (
     SessionNotFound,
     UnsupportedProtocol,
 )
-from claude_code_blackbox.messaging import (
+from cc_blackbox.messaging import (
     MessagingTarget,
     Priority,
     RateLimitedSender,
@@ -25,8 +25,8 @@ from claude_code_blackbox.messaging import (
     rename_session,
     send_message,
 )
-from claude_code_blackbox.paths import claude_tmp_root, project_slug, scratchpad_dir
-from claude_code_blackbox.profiles import (
+from cc_blackbox.paths import claude_tmp_root, project_slug, scratchpad_dir
+from cc_blackbox.profiles import (
     AuthSwitchConfig,
     AuthSwitchProfile,
     ClaudeProfile,
@@ -36,7 +36,7 @@ from claude_code_blackbox.profiles import (
     list_profiles,
     read_auth_switch_config,
 )
-from claude_code_blackbox.sessions import (
+from cc_blackbox.sessions import (
     ActiveSession,
     SessionKind,
     SessionStatus,

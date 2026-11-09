@@ -18,8 +18,8 @@ from typing import Any, Literal
 
 import yaml
 
-from claude_code_blackbox.errors import AuthSwitchConfigError, ProfileNotFound
-from claude_code_blackbox.paths import default_config_dir
+from cc_blackbox.errors import AuthSwitchConfigError, ProfileNotFound
+from cc_blackbox.paths import default_config_dir
 
 __all__ = [
     "AuthSwitchConfig",
