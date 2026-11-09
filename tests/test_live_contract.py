@@ -1,8 +1,10 @@
-"""The live contract test: start a real headless Claude Code session and message it through cc-blackbox.
+"""The live contract tests: start real headless Claude Code sessions, message one through cc-blackbox, and deny a tool
+call in another with a hook built on cc_blackbox.hooks.
 
-It is excluded from the default run and from CI. Run it with ``uv run pytest -m live -s`` after a Claude Code update
-to confirm that the registry record, the messaging protocol and the transcript records are still aligned. It needs the
-``claude`` CLI on PATH, logged in, and it spends a little model usage: two short turns on the cheapest model.
+They are excluded from the default run and from CI. Run them with ``uv run pytest -m live -s`` after a Claude Code
+update to confirm that the registry record, the messaging protocol, the transcript records and the hook contract are
+still aligned. They need the ``claude`` CLI on PATH, logged in, and they spend a little model usage: three short turns
+on the cheapest model.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -208,3 +211,89 @@ def test_headless_session_receives_a_message(workdir: Path) -> None:
         if session is not None and session.session_id is not None and session.cwd is not None:
             # The headless run wrote a transcript for the temporary cwd; nothing else lives in that project dir.
             shutil.rmtree(session.profile.projects_dir / project_slug(session.cwd), ignore_errors=True)
+
+
+DENY_HOOK = """
+import json, sys
+from pathlib import Path
+
+from cc_blackbox.hooks import PreToolUseInput, PreToolUseReply, run_hook
+
+dump, marker = Path(sys.argv[1]), sys.argv[2]
+
+
+def deny(event: PreToolUseInput) -> PreToolUseReply:
+    view = event.typed_tool_input()
+    dump.write_text(json.dumps({
+        "class": type(event).__name__,
+        "session_id": event.session_id,
+        "type_mismatches": list(event.type_mismatches),
+        "command": getattr(view, "command", None),
+        "raw_keys": sorted(event.raw),
+    }))
+    return PreToolUseReply.deny(f"{marker}: this hook denies every Bash call.")
+
+
+run_hook(deny, expect=PreToolUseInput, name="cc-blackbox-live")
+"""
+
+
+@pytest.mark.skipif(CLAUDE is None, reason="the claude CLI is not on PATH")
+def test_pre_tool_use_hook_denies_a_tool_call(workdir: Path) -> None:
+    """A PreToolUse hook built on cc_blackbox.hooks denies a Bash call that an allow rule would let through."""
+    assert CLAUDE is not None
+    marker = f"cc-blackbox-hook-{uuid.uuid4().hex[:12]}"
+    script, dump = workdir / "deny_hook.py", workdir / "hook-input.json"
+    script.write_text(DENY_HOOK, encoding="utf-8")
+    hook = {"type": "command", "command": sys.executable, "args": [str(script), str(dump), marker], "timeout": 30}
+    settings = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [hook]}]}}
+    env = {k: v for k, v in os.environ.items() if k not in _SESSION_ENV}
+    command = [
+        CLAUDE,
+        "-p",
+        "Run exactly this Bash command and nothing else: touch ran. If the call is denied, do not retry; reply with "
+        "the denial reason verbatim.",
+        "--output-format=stream-json",
+        "--verbose",
+        f"--model={MODEL}",
+        "--tools=Bash",
+        "--allowedTools=Bash(touch *)",
+        # Keep the user's own hooks and plugins out: only this run's --settings apply.
+        "--setting-sources=local",
+        "--strict-mcp-config",
+        "--max-budget-usd=0.5",
+        f"--settings={json.dumps(settings)}",
+    ]
+    started = time.monotonic()
+    result = subprocess.run(command, cwd=workdir, env=env, capture_output=True, text=True, timeout=REPLY_TIMEOUT)
+    events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
+    final = [e for e in events if e.get("type") == "result"]
+    session_id = final[-1].get("session_id") if final else None
+    try:
+        assert final, f"no result event. Exit {result.returncode}. Stderr: {result.stderr[-2000:]}"
+        assert not (workdir / "ran").exists(), "the denied command ran"
+        assert dump.exists(), f"the hook never ran. Events: {events[-3:]}"
+        seen = json.loads(dump.read_text(encoding="utf-8"))
+        assert seen["class"] == "PreToolUseInput"
+        assert seen["type_mismatches"] == [], seen
+        assert "touch" in (seen["command"] or "")
+        assert seen["session_id"] == session_id
+        tool_results = [
+            block
+            for e in events
+            if e.get("type") == "user"
+            for block in (e.get("message") or {}).get("content") or []
+            if isinstance(block, dict) and block.get("type") == "tool_result"
+        ]
+        assert any(marker in json.dumps(block) for block in tool_results), (
+            f"no tool result carries the deny reason: {tool_results}"
+        )
+        cost, turns = final[-1].get("total_cost_usd"), final[-1].get("num_turns")
+        print(
+            f"\nlive hook contract: {time.monotonic() - started:.1f} s, total_cost_usd {cost}, num_turns {turns}, "
+            f"payload keys {seen['raw_keys']}"
+        )
+    finally:
+        profile = current_profile()
+        if profile is not None:
+            shutil.rmtree(profile.projects_dir / project_slug(workdir.resolve()), ignore_errors=True)
