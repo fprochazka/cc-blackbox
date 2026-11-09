@@ -1,5 +1,22 @@
 """Session transcripts: where Claude Code keeps them, how to read them and what their records mean."""
 
+from cc_blackbox.transcripts.entries import (
+    KNOWN_ENTRY_TYPES,
+    AssistantEntry,
+    AttachmentEntry,
+    ContentBlock,
+    Entry,
+    ImageBlock,
+    ReadDiagnostics,
+    SystemEntry,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UnknownBlock,
+    Usage,
+    UserEntry,
+)
 from cc_blackbox.transcripts.layout import (
     ProjectsDir,
     is_session_file_name,
@@ -7,11 +24,28 @@ from cc_blackbox.transcripts.layout import (
     list_projects_dirs,
     session_id_for_path,
 )
+from cc_blackbox.transcripts.reader import iter_entries
 
 __all__ = [
+    "AssistantEntry",
+    "AttachmentEntry",
+    "ContentBlock",
+    "Entry",
+    "ImageBlock",
+    "KNOWN_ENTRY_TYPES",
     "ProjectsDir",
+    "ReadDiagnostics",
+    "SystemEntry",
+    "TextBlock",
+    "ThinkingBlock",
+    "ToolResultBlock",
+    "ToolUseBlock",
+    "UnknownBlock",
+    "Usage",
+    "UserEntry",
     "is_session_file_name",
     "is_session_id",
+    "iter_entries",
     "list_projects_dirs",
     "session_id_for_path",
 ]

@@ -139,7 +139,8 @@ def bookkeeping(record_type: str, session_id: str = SESSION_ID, **fields: Any) -
 
 
 def jsonl(records: Iterable[dict[str, Any] | str]) -> str:
-    return "".join((r if isinstance(r, str) else json.dumps(r)) + "\n" for r in records)
+    # Claude Code writes compact JSON, one record per line.
+    return "".join((r if isinstance(r, str) else json.dumps(r, separators=(",", ":"))) + "\n" for r in records)
 
 
 def write_transcript(
