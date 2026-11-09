@@ -12,8 +12,13 @@ __all__ = [
     "AmbiguousSession",
     "AuthSwitchConfigError",
     "ClaudeBlackboxError",
+    "MessageTooLarge",
+    "MessagingError",
+    "MessagingUnavailable",
     "ProfileNotFound",
+    "SessionGone",
     "SessionNotFound",
+    "UnsupportedProtocol",
 ]
 
 
@@ -39,3 +44,23 @@ class AmbiguousSession(ClaudeBlackboxError, LookupError):
     def __init__(self, message: str, candidates: Sequence[ActiveSession]) -> None:
         super().__init__(message)
         self.candidates: tuple[ActiveSession, ...] = tuple(candidates)
+
+
+class MessagingError(ClaudeBlackboxError):
+    """A message or control frame could not be written to a session."""
+
+
+class MessagingUnavailable(MessagingError):
+    """The session cannot receive messages: its record names no socket, or the platform is not supported."""
+
+
+class SessionGone(MessagingError):
+    """Nobody listens on the session's socket, so the session has most likely ended."""
+
+
+class MessageTooLarge(MessagingError, ValueError):
+    """The frame exceeds the receiver's 1 MiB line limit. Nothing was sent."""
+
+
+class UnsupportedProtocol(MessagingError):
+    """The session speaks a peer protocol version this SDK does not know."""

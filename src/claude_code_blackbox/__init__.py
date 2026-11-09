@@ -7,8 +7,23 @@ from claude_code_blackbox.errors import (
     AmbiguousSession,
     AuthSwitchConfigError,
     ClaudeBlackboxError,
+    MessageTooLarge,
+    MessagingError,
+    MessagingUnavailable,
     ProfileNotFound,
+    SessionGone,
     SessionNotFound,
+    UnsupportedProtocol,
+)
+from claude_code_blackbox.messaging import (
+    MessagingTarget,
+    Priority,
+    RateLimitedSender,
+    SentMessage,
+    build_envelope,
+    percent_encode_address,
+    rename_session,
+    send_message,
 )
 from claude_code_blackbox.paths import claude_tmp_root, project_slug, scratchpad_dir
 from claude_code_blackbox.profiles import (
@@ -38,11 +53,21 @@ __all__ = [
     "AuthSwitchProfile",
     "ClaudeBlackboxError",
     "ClaudeProfile",
+    "MessageTooLarge",
+    "MessagingError",
+    "MessagingTarget",
+    "MessagingUnavailable",
+    "Priority",
     "ProfileNotFound",
     "ProfileSource",
+    "RateLimitedSender",
+    "SentMessage",
+    "SessionGone",
     "SessionKind",
     "SessionNotFound",
     "SessionStatus",
+    "UnsupportedProtocol",
+    "build_envelope",
     "claude_tmp_root",
     "current_profile",
     "current_session",
@@ -50,9 +75,12 @@ __all__ = [
     "get_profile",
     "list_active_sessions",
     "list_profiles",
+    "percent_encode_address",
     "project_slug",
     "read_auth_switch_config",
+    "rename_session",
     "scratchpad_dir",
+    "send_message",
 ]
 
 __version__ = "0.1.0"
