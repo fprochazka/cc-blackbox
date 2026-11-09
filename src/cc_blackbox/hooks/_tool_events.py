@@ -1,13 +1,14 @@
-"""Tool-call events: PreToolUse, PermissionRequest, PermissionDenied, PostToolUse, PostToolUseFailure, PostToolBatch."""
+"""Tool-call events and their replies: PreToolUse, PermissionRequest, PermissionDenied, PostToolUse,
+PostToolUseFailure, PostToolBatch."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from cc_blackbox.hooks._base import FieldReader, HookInput
+from cc_blackbox.hooks._base import FieldReader, HookInput, HookReply, PermissionDecision, plain, require
 
 if TYPE_CHECKING:
     from cc_blackbox.hooks._tool_inputs import ToolInputView
@@ -206,6 +207,229 @@ def _post_tool_batch(r: FieldReader) -> PostToolBatchInput:
         tool_calls=tuple(_batched_call(call) for call in r.records("tool_calls")),
         **r.finish(),
     )
+
+
+# Replies
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PreToolUseReply(HookReply):
+    """Allow, deny, ask about, defer or rewrite a tool call. Build one with the class methods.
+
+    Printing nothing leaves the call to the normal permission flow; an explicit ``allow`` skips the user's prompt and
+    overrides other hooks' asks, so return ``None`` from a handler that has no opinion. In auto mode Claude Code still
+    sends an allowed call to its classifier.
+    """
+
+    EVENT: ClassVar[str | None] = "PreToolUse"
+
+    decision: PermissionDecision | None = None
+    reason: str | None = None
+    """For ``deny``, what Claude reads; for ``ask``, what the user reads; for ``allow``, only the debug log."""
+    updated_input: Mapping[str, Any] | None = None
+    """Replaces the whole tool input. Start from :meth:`ToolHookInput.tool_input_with`."""
+    additional_context: str | None = None
+
+    def __post_init__(self) -> None:
+        require(self.decision != "deny" or bool(self.reason), "A deny needs a reason: Claude reads it.")
+        require(
+            self.decision not in ("deny", "defer") or self.updated_input is None,
+            f"A {self.decision} cannot rewrite the tool input.",
+        )
+        require(self.decision != "defer" or self.additional_context is None, "A defer ignores additional context.")
+
+    @classmethod
+    def allow(
+        cls,
+        *,
+        reason: str | None = None,
+        updated_input: Mapping[str, Any] | None = None,
+        additional_context: str | None = None,
+    ) -> PreToolUseReply:
+        return cls(decision="allow", reason=reason, updated_input=updated_input, additional_context=additional_context)
+
+    @classmethod
+    def deny(cls, reason: str, *, additional_context: str | None = None) -> PreToolUseReply:
+        return cls(decision="deny", reason=reason, additional_context=additional_context)
+
+    @classmethod
+    def ask(
+        cls,
+        reason: str | None = None,
+        *,
+        updated_input: Mapping[str, Any] | None = None,
+        additional_context: str | None = None,
+    ) -> PreToolUseReply:
+        """Show the permission prompt. In a ``-p`` run nobody can answer it, so Claude Code denies the call."""
+        return cls(decision="ask", reason=reason, updated_input=updated_input, additional_context=additional_context)
+
+    @classmethod
+    def defer(cls) -> PreToolUseReply:
+        """End the turn so the caller of ``claude -p`` can resume the call later. Ignored in interactive sessions."""
+        return cls(decision="defer")
+
+    @classmethod
+    def context(
+        cls, additional_context: str | None = None, *, updated_input: Mapping[str, Any] | None = None
+    ) -> PreToolUseReply:
+        """Add context or rewrite the input without a decision. In auto mode, a rewrite without a decision can be
+        denied."""
+        return cls(additional_context=additional_context, updated_input=updated_input)
+
+    def specific_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.decision is not None:
+            out["permissionDecision"] = self.decision
+        if self.reason is not None:
+            out["permissionDecisionReason"] = self.reason
+        if self.updated_input is not None:
+            out["updatedInput"] = plain(self.updated_input)
+        if self.additional_context is not None:
+            out["additionalContext"] = self.additional_context
+        return out
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PermissionRequestReply(HookReply):
+    """Answer a permission prompt for the user."""
+
+    EVENT: ClassVar[str | None] = "PermissionRequest"
+
+    behavior: Literal["allow", "deny"]
+    updated_input: Mapping[str, Any] | None = None
+    updated_permissions: tuple[Mapping[str, Any], ...] = ()
+    """Permission update entries to apply, such as one of the input's ``permission_suggestions``."""
+    message: str | None = None
+    """For a deny: tells Claude why."""
+    interrupt: bool = False
+    """For a deny: also stop Claude."""
+
+    def __post_init__(self) -> None:
+        if self.behavior == "allow":
+            require(self.message is None and not self.interrupt, "An allow takes no message and no interrupt.")
+        else:
+            require(self.updated_input is None and not self.updated_permissions, "A deny cannot change input or rules.")
+
+    @classmethod
+    def allow(
+        cls, *, updated_input: Mapping[str, Any] | None = None, updated_permissions: Iterable[Mapping[str, Any]] = ()
+    ) -> PermissionRequestReply:
+        return cls(behavior="allow", updated_input=updated_input, updated_permissions=tuple(updated_permissions))
+
+    @classmethod
+    def deny(cls, message: str | None = None, *, interrupt: bool = False) -> PermissionRequestReply:
+        return cls(behavior="deny", message=message, interrupt=interrupt)
+
+    def specific_json(self) -> dict[str, Any]:
+        decision: dict[str, Any] = {"behavior": self.behavior}
+        if self.updated_input is not None:
+            decision["updatedInput"] = plain(self.updated_input)
+        if self.updated_permissions:
+            decision["updatedPermissions"] = plain(self.updated_permissions)
+        if self.message is not None:
+            decision["message"] = self.message
+        if self.interrupt:
+            decision["interrupt"] = True
+        return {"decision": decision}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PermissionDeniedReply(HookReply):
+    """Tell the model it may retry a call auto mode denied. The denial itself stands."""
+
+    EVENT: ClassVar[str | None] = "PermissionDenied"
+
+    retry: bool = False
+
+    @classmethod
+    def allow_retry(cls) -> PermissionDeniedReply:
+        return cls(retry=True)
+
+    def specific_json(self) -> dict[str, Any]:
+        return {"retry": True} if self.retry else {}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PostToolUseReply(HookReply):
+    """Feedback after a tool ran. The tool already took effect; a block only adds the reason next to its result."""
+
+    EVENT: ClassVar[str | None] = "PostToolUse"
+
+    block_reason: str | None = None
+    additional_context: str | None = None
+    classifier_context: str | None = None
+    """A short note about this call's result for the auto-mode classifier, not for Claude."""
+    updated_tool_output: Any = None
+    """Replaces what Claude sees. It must match the tool's output shape, or Claude Code ignores it."""
+
+    @classmethod
+    def block(cls, reason: str, *, additional_context: str | None = None) -> PostToolUseReply:
+        require(bool(reason), "A block needs a reason.")
+        return cls(block_reason=reason, additional_context=additional_context)
+
+    @classmethod
+    def context(cls, additional_context: str, *, classifier_context: str | None = None) -> PostToolUseReply:
+        return cls(additional_context=additional_context, classifier_context=classifier_context)
+
+    @classmethod
+    def replace_output(
+        cls, output: Any, *, classifier_context: str | None = None, additional_context: str | None = None
+    ) -> PostToolUseReply:
+        require(output is not None, "The replacement output cannot be None.")
+        return cls(
+            updated_tool_output=output, classifier_context=classifier_context, additional_context=additional_context
+        )
+
+    def top_level_json(self) -> dict[str, Any]:
+        return {} if self.block_reason is None else {"decision": "block", "reason": self.block_reason}
+
+    def specific_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.additional_context is not None:
+            out["additionalContext"] = self.additional_context
+        if self.classifier_context is not None:
+            out["classifierContext"] = self.classifier_context
+        if self.updated_tool_output is not None:
+            out["updatedToolOutput"] = plain(self.updated_tool_output)
+        return out
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PostToolUseFailureReply(HookReply):
+    EVENT: ClassVar[str | None] = "PostToolUseFailure"
+
+    additional_context: str | None = None
+
+    @classmethod
+    def context(cls, additional_context: str) -> PostToolUseFailureReply:
+        return cls(additional_context=additional_context)
+
+    def specific_json(self) -> dict[str, Any]:
+        return {} if self.additional_context is None else {"additionalContext": self.additional_context}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PostToolBatchReply(HookReply):
+    EVENT: ClassVar[str | None] = "PostToolBatch"
+
+    block_reason: str | None = None
+    """Stops the agentic loop before the next model request."""
+    additional_context: str | None = None
+
+    @classmethod
+    def block(cls, reason: str) -> PostToolBatchReply:
+        require(bool(reason), "A block needs a reason.")
+        return cls(block_reason=reason)
+
+    @classmethod
+    def context(cls, additional_context: str) -> PostToolBatchReply:
+        return cls(additional_context=additional_context)
+
+    def top_level_json(self) -> dict[str, Any]:
+        return {} if self.block_reason is None else {"decision": "block", "reason": self.block_reason}
+
+    def specific_json(self) -> dict[str, Any]:
+        return {} if self.additional_context is None else {"additionalContext": self.additional_context}
 
 
 PARSERS: dict[str, Callable[[FieldReader], HookInput]] = {

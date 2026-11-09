@@ -1,4 +1,5 @@
-"""Turn events: prompts, Stop and SubagentStop, subagent start, notifications, message display, tasks and teammates."""
+"""Turn events and their replies: prompts, Stop and SubagentStop, subagent start, notifications, message display,
+tasks and teammates."""
 
 from __future__ import annotations
 
@@ -6,9 +7,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
-from cc_blackbox.hooks._base import FieldReader, HookInput
+from cc_blackbox.hooks._base import FieldReader, HookInput, HookReply, HookResponse, dumps, require
 
 if TYPE_CHECKING:
+    from typing import Self
+
     from cc_blackbox.sessions.stored import SubagentTranscript
 
 
@@ -307,6 +310,206 @@ def _teammate_idle(r: FieldReader) -> TeammateIdleInput:
     return TeammateIdleInput(
         **r.common(), teammate_name=r.text("teammate_name"), team_name=r.text("team_name"), **r.finish()
     )
+
+
+# Replies
+
+
+def _block_json(reason: str | None) -> dict[str, Any]:
+    return {} if reason is None else {"decision": "block", "reason": reason}
+
+
+def _context_json(additional_context: str | None) -> dict[str, Any]:
+    return {} if additional_context is None else {"additionalContext": additional_context}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UserPromptSubmitReply(HookReply):
+    """Block a prompt, or add context next to it. A hook cannot rewrite the prompt."""
+
+    EVENT: ClassVar[str | None] = "UserPromptSubmit"
+
+    block_reason: str | None = None
+    """Shown to the user, not to Claude."""
+    suppress_original_prompt: bool = False
+    additional_context: str | None = None
+    session_title: str | None = None
+
+    def __post_init__(self) -> None:
+        require(self.block_reason is not None or not self.suppress_original_prompt, "Only a block can hide the prompt.")
+
+    @classmethod
+    def block(cls, reason: str, *, suppress_original_prompt: bool = False) -> UserPromptSubmitReply:
+        """Stop the prompt. By default the block message quotes it; ``suppress_original_prompt`` leaves it out."""
+        require(bool(reason), "A block needs a reason.")
+        return cls(block_reason=reason, suppress_original_prompt=suppress_original_prompt)
+
+    @classmethod
+    def context(
+        cls, additional_context: str | None = None, *, session_title: str | None = None
+    ) -> UserPromptSubmitReply:
+        return cls(additional_context=additional_context, session_title=session_title)
+
+    def top_level_json(self) -> dict[str, Any]:
+        return _block_json(self.block_reason)
+
+    def specific_json(self) -> dict[str, Any]:
+        out = _context_json(self.additional_context)
+        if self.session_title is not None:
+            out["sessionTitle"] = self.session_title
+        if self.suppress_original_prompt:
+            out["suppressOriginalPrompt"] = True
+        return out
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UserPromptExpansionReply(HookReply):
+    EVENT: ClassVar[str | None] = "UserPromptExpansion"
+
+    block_reason: str | None = None
+    suppress_original_prompt: bool = False
+    additional_context: str | None = None
+
+    def __post_init__(self) -> None:
+        require(self.block_reason is not None or not self.suppress_original_prompt, "Only a block can hide the prompt.")
+
+    @classmethod
+    def block(cls, reason: str, *, suppress_original_prompt: bool = False) -> UserPromptExpansionReply:
+        require(bool(reason), "A block needs a reason.")
+        return cls(block_reason=reason, suppress_original_prompt=suppress_original_prompt)
+
+    @classmethod
+    def context(cls, additional_context: str) -> UserPromptExpansionReply:
+        return cls(additional_context=additional_context)
+
+    def top_level_json(self) -> dict[str, Any]:
+        return _block_json(self.block_reason)
+
+    def specific_json(self) -> dict[str, Any]:
+        out = _context_json(self.additional_context)
+        if self.suppress_original_prompt:
+            out["suppressOriginalPrompt"] = True
+        return out
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StopHookReply(HookReply):
+    """Keep Claude working, as an error (``block``) or as feedback (``context``). Check ``stop_hook_active`` first:
+    Claude Code ends the turn anyway after eight continuations in a row."""
+
+    block_reason: str | None = None
+    """Tells Claude why it should continue."""
+    additional_context: str | None = None
+
+    @classmethod
+    def block(cls, reason: str) -> Self:
+        require(bool(reason), "A block needs a reason: Claude reads it as its next instruction.")
+        return cls(block_reason=reason)
+
+    @classmethod
+    def context(cls, additional_context: str) -> Self:
+        return cls(additional_context=additional_context)
+
+    def top_level_json(self) -> dict[str, Any]:
+        return _block_json(self.block_reason)
+
+    def specific_json(self) -> dict[str, Any]:
+        return _context_json(self.additional_context)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StopReply(StopHookReply):
+    EVENT: ClassVar[str | None] = "Stop"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SubagentStopReply(StopHookReply):
+    EVENT: ClassVar[str | None] = "SubagentStop"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SubagentStartReply(HookReply):
+    EVENT: ClassVar[str | None] = "SubagentStart"
+
+    additional_context: str | None = None
+
+    @classmethod
+    def context(cls, additional_context: str) -> SubagentStartReply:
+        return cls(additional_context=additional_context)
+
+    def specific_json(self) -> dict[str, Any]:
+        return _context_json(self.additional_context)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MessageDisplayReply(HookReply):
+    """Replace the displayed text. Display-only: Claude and the transcript keep the original."""
+
+    EVENT: ClassVar[str | None] = "MessageDisplay"
+
+    display_content: str | None = None
+
+    @classmethod
+    def display(cls, text: str) -> MessageDisplayReply:
+        return cls(display_content=text)
+
+    def specific_json(self) -> dict[str, Any]:
+        return {} if self.display_content is None else {"displayContent": self.display_content}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskCreatedReply(HookReply):
+    EVENT: ClassVar[str | None] = "TaskCreated"
+
+    block_reason: str | None = None
+    """Claude Code deletes the task and returns this to Claude as the tool's error."""
+
+    @classmethod
+    def block(cls, reason: str) -> TaskCreatedReply:
+        require(bool(reason), "A block needs a reason.")
+        return cls(block_reason=reason)
+
+    def top_level_json(self) -> dict[str, Any]:
+        return _block_json(self.block_reason)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _FeedbackReply(HookReply):
+    """A reply whose block exists only as exit code 2 with the feedback on stderr."""
+
+    feedback: str | None = None
+
+    def render(self) -> HookResponse:
+        payload = self.to_json()
+        return HookResponse(
+            stdout=dumps(payload) if payload else "",
+            stderr="" if self.feedback is None else self.feedback.rstrip("\n") + "\n",
+            exit_code=0 if self.feedback is None else 2,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskCompletedReply(_FeedbackReply):
+    """Keep a task open. Claude Code reads this block only from exit code 2, so it is not JSON."""
+
+    EVENT: ClassVar[str | None] = "TaskCompleted"
+
+    @classmethod
+    def block(cls, feedback: str) -> TaskCompletedReply:
+        require(bool(feedback), "A block needs feedback for the model.")
+        return cls(feedback=feedback)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TeammateIdleReply(_FeedbackReply):
+    """Keep a teammate working. Claude Code reads this only from exit code 2; ``with_halt()`` stops the teammate."""
+
+    EVENT: ClassVar[str | None] = "TeammateIdle"
+
+    @classmethod
+    def keep_working(cls, feedback: str) -> TeammateIdleReply:
+        require(bool(feedback), "Feedback for the teammate is required.")
+        return cls(feedback=feedback)
 
 
 PARSERS: dict[str, Callable[[FieldReader], HookInput]] = {

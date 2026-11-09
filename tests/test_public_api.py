@@ -7,17 +7,22 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import assert_type
 
+import pytest
+
 import cc_blackbox
+import cc_blackbox.hooks
 from cc_blackbox import ActiveSession, ClaudeProfile, SessionTranscript
+from cc_blackbox.hooks import PreToolUseInput, PreToolUseReply
 
-INIT = Path(cc_blackbox.__file__)
+PACKAGES = [cc_blackbox, cc_blackbox.hooks]
 
 
-def _type_checking_imports() -> dict[str, str]:
+def _type_checking_imports(package: ModuleType) -> dict[str, str]:
     """The names the ``if TYPE_CHECKING:`` block imports, mapped to their module."""
-    tree = ast.parse(INIT.read_text(encoding="utf-8"))
+    tree = ast.parse(Path(str(package.__file__)).read_text(encoding="utf-8"))
     names: dict[str, str] = {}
     for node in tree.body:
         if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
@@ -28,31 +33,31 @@ def _type_checking_imports() -> dict[str, str]:
     return names
 
 
-def test_every_name_in_all_resolves() -> None:
-    for name in cc_blackbox.__all__:
-        assert getattr(cc_blackbox, name) is not None, name
+@pytest.mark.parametrize("package", PACKAGES, ids=lambda p: p.__name__)
+def test_every_name_in_all_resolves(package: ModuleType) -> None:
+    for name in package.__all__:
+        assert getattr(package, name) is not None, name
 
 
-def test_type_checking_imports_and_lazy_map_agree() -> None:
-    exports: dict[str, str] = getattr(cc_blackbox, "_EXPORTS")  # noqa: B009 - private, read on purpose
-    assert _type_checking_imports() == exports
-    assert sorted(exports) == sorted(cc_blackbox.__all__)
+@pytest.mark.parametrize("package", PACKAGES, ids=lambda p: p.__name__)
+def test_type_checking_imports_and_lazy_map_agree(package: ModuleType) -> None:
+    exports: dict[str, str] = getattr(package, "_EXPORTS")  # noqa: B009 - private, read on purpose
+    assert _type_checking_imports(package) == exports
+    assert sorted(exports) == sorted(package.__all__)
 
 
-def test_star_import_and_dir_cover_all() -> None:
+@pytest.mark.parametrize("package", PACKAGES, ids=lambda p: p.__name__)
+def test_star_import_and_dir_cover_all(package: ModuleType) -> None:
     namespace: dict[str, object] = {}
-    exec("from cc_blackbox import *", namespace)
-    assert set(cc_blackbox.__all__) <= set(namespace)
-    assert set(cc_blackbox.__all__) <= set(dir(cc_blackbox))
+    exec(f"from {package.__name__} import *", namespace)
+    assert set(package.__all__) <= set(namespace)
+    assert set(package.__all__) <= set(dir(package))
 
 
-def test_unknown_name_raises_attribute_error() -> None:
-    try:
-        getattr(cc_blackbox, "no_such_name")  # noqa: B009
-    except AttributeError as error:
-        assert "no_such_name" in str(error)
-    else:
-        raise AssertionError("expected AttributeError")
+@pytest.mark.parametrize("package", PACKAGES, ids=lambda p: p.__name__)
+def test_unknown_name_raises_attribute_error(package: ModuleType) -> None:
+    with pytest.raises(AttributeError, match="no_such_name"):
+        getattr(package, "no_such_name")  # noqa: B009
 
 
 def test_import_loads_no_submodule() -> None:
@@ -64,9 +69,11 @@ def test_import_loads_no_submodule() -> None:
 
 def test_type_checkers_see_the_real_types() -> None:
     # assert_type is a no-op at run time; mypy --strict fails this file if a name were typed as Any.
-    def check(session: ActiveSession, transcript: SessionTranscript) -> None:
+    def check(session: ActiveSession, transcript: SessionTranscript, event: PreToolUseInput) -> None:
         assert_type(session.pid, int)
         assert_type(transcript.session_id, str)
+        assert_type(event.tool_use_id, str | None)
+        assert_type(PreToolUseReply.deny("x"), PreToolUseReply)
 
     assert_type(cc_blackbox.__version__, str)
     assert callable(check)
