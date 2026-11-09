@@ -17,7 +17,7 @@ The package is not on PyPI. Pin a tag of this repository as a git dependency:
 dependencies = ["cc-blackbox"]
 
 [tool.uv.sources]
-cc-blackbox = { git = "https://github.com/fprochazka/claude-code-blackbox-sdk", tag = "v0.2.0" }
+cc-blackbox = { git = "https://github.com/fprochazka/cc-blackbox", tag = "v0.2.0" }
 ```
 
 It needs Python 3.11 or newer and depends only on PyYAML.

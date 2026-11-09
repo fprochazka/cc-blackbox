@@ -26,8 +26,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/fprochazka/claude-code-blackbox-sdk"
-Repository = "https://github.com/fprochazka/claude-code-blackbox-sdk"
+Homepage = "https://github.com/fprochazka/cc-blackbox"
+Repository = "https://github.com/fprochazka/cc-blackbox"
 
 [build-system]
 requires = ["hatchling"]
