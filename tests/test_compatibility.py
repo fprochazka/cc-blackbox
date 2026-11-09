@@ -105,15 +105,15 @@ def test_reasons_cover_every_problem(home: Path) -> None:
     ] * (2 if on_linux else 1)
 
 
-def test_send_message_reports_the_reasons(home: Path, tmp_path: Path) -> None:
-    session = session_from(home, without(peerProtocol=3, messagingSocketPath=str(tmp_path / "x.sock")))
+def test_send_message_reports_the_reasons(home: Path, socket_dir: Path) -> None:
+    session = session_from(home, without(peerProtocol=3, messagingSocketPath=str(socket_dir / "x.sock")))
     with pytest.raises(UnsupportedProtocol, match=r"peerProtocol 3, and this cc-blackbox version speaks 1"):
         send_message(session, "hi", sender="w")
 
 
-def test_send_message_ignores_other_features(home: Path, tmp_path: Path) -> None:
+def test_send_message_ignores_other_features(home: Path, socket_dir: Path) -> None:
     # Only messaging matters for sending: a record without cwd still gets the message.
-    session = session_from(home, without("cwd", messagingSocketPath=str(tmp_path / "missing.sock")))
+    session = session_from(home, without("cwd", messagingSocketPath=str(socket_dir / "missing.sock")))
     assert not session.compatibility.compatible
     with pytest.raises(SessionGone):
         send_message(session, "hi", sender="w")

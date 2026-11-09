@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import socket
-import tempfile
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -69,14 +67,6 @@ class FakeReceiver:
     def close(self) -> None:
         self._stopping = True
         self._server.close()
-
-
-@pytest.fixture
-def socket_dir() -> Iterator[Path]:
-    # AF_UNIX paths are limited to about 104 bytes, which a pytest tmp_path on macOS can exceed.
-    path = Path(tempfile.mkdtemp(prefix="cc-socks-", dir="/tmp"))
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture
