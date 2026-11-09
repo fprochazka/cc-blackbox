@@ -1,7 +1,7 @@
 [project]
 name = "cc-blackbox"
 version = "0.1.0"
-description = "Typed Python access to a running Claude Code: profiles, active sessions and cross-session messaging"
+description = "Unofficial, not affiliated with or endorsed by Anthropic: typed Python access to a running Claude Code (cc), its profiles, sessions and messaging, through undocumented internals that can change in any release"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

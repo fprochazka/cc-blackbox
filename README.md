@@ -1,10 +1,12 @@
+> **Unofficial.** This project is not affiliated with or endorsed by Anthropic. It relies on undocumented Claude Code internals that can change in any Claude Code release.
+
 # cc-blackbox
 
-A typed Python library for tools that work next to a running [Claude Code](https://code.claude.com): find the Claude Code profiles on the machine, list the sessions that run under them, and send a message into one of them.
+"cc" stands for Claude Code. cc-blackbox is a typed Python library for tools that work next to a running [Claude Code](https://code.claude.com): find the Claude Code profiles on the machine, list the sessions that run under them, and send a message into one of them.
 
 A typical user is a background watcher started from a Claude Code session, for example one that polls CI and tells the session when a pipeline fails.
 
-Claude Code does not document any of this. The SDK reads the files Claude Code writes and speaks the socket protocol Claude Code uses between its own sessions, as found in Claude Code 2.1.x. Read [Limitations](#limitations) before you depend on it.
+Claude Code does not document any of this. The library reads the files Claude Code writes and speaks the socket protocol Claude Code uses between its own sessions, as found in Claude Code 2.1.x. Read [Limitations](#limitations) before you depend on it.
 
 ## Install
 

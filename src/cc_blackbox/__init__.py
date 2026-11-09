@@ -1,4 +1,7 @@
-"""Typed access to a running Claude Code: profiles, active sessions and cross-session messaging.
+"""Typed access to a running Claude Code (cc): profiles, active sessions and cross-session messaging.
+
+Unofficial and not affiliated with or endorsed by Anthropic. The package relies on undocumented Claude Code internals
+that can change in any Claude Code release.
 
 Everything importable from this package is the public API. Submodules are implementation details.
 """
