@@ -61,6 +61,7 @@ from cc_blackbox.sessions import (
     list_active_sessions,
     list_session_transcripts,
     read_session_transcript,
+    sessions_containing,
     transcript_for,
 )
 from cc_blackbox.transcripts import (
@@ -209,6 +210,7 @@ __all__ = [
     "scratchpad_dir",
     "send_message",
     "session_id_for_path",
+    "sessions_containing",
     "shell_commands",
     "subagent_runs",
     "token_usage",

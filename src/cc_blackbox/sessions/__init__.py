@@ -8,6 +8,7 @@ from cc_blackbox.sessions.active import (
     find_session,
     list_active_sessions,
 )
+from cc_blackbox.sessions.search import sessions_containing
 from cc_blackbox.sessions.stored import (
     SessionTranscript,
     SubagentTranscript,
@@ -33,5 +34,6 @@ __all__ = [
     "list_active_sessions",
     "list_session_transcripts",
     "read_session_transcript",
+    "sessions_containing",
     "transcript_for",
 ]

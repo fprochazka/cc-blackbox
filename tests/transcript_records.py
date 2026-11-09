@@ -139,8 +139,10 @@ def bookkeeping(record_type: str, session_id: str = SESSION_ID, **fields: Any) -
 
 
 def jsonl(records: Iterable[dict[str, Any] | str]) -> str:
-    # Claude Code writes compact JSON, one record per line.
-    return "".join((r if isinstance(r, str) else json.dumps(r, separators=(",", ":"))) + "\n" for r in records)
+    # Claude Code writes compact JSON with raw UTF-8, one record per line.
+    return "".join(
+        (r if isinstance(r, str) else json.dumps(r, separators=(",", ":"), ensure_ascii=False)) + "\n" for r in records
+    )
 
 
 def write_transcript(
