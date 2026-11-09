@@ -2,11 +2,11 @@
 
 # cc-blackbox
 
-"cc" stands for Claude Code. cc-blackbox is a typed Python library for tools that work next to [Claude Code](https://code.claude.com): find the Claude Code profiles on the machine, list the sessions that run under them, send a message into one of them, and read what past and running sessions recorded in their transcripts.
+"cc" stands for Claude Code. cc-blackbox is a typed Python library for tools that work next to [Claude Code](https://code.claude.com): find the Claude Code profiles on the machine, list the sessions that run under them, send a message into one of them, read what past and running sessions recorded in their transcripts, and write hooks in Python.
 
 A typical user is a background watcher started from a Claude Code session, for example one that polls CI and tells the session when a pipeline fails.
 
-Claude Code does not document any of this. The library reads the files Claude Code writes and speaks the socket protocol Claude Code uses between its own sessions, as found in Claude Code 2.1.x. It never writes to a transcript. Read [Limitations](#limitations) before you depend on it.
+Claude Code does not document any of this except hooks. The library reads the files Claude Code writes and speaks the socket protocol Claude Code uses between its own sessions, as found in Claude Code 2.1.x. It never writes to a transcript. Read [Limitations](#limitations) before you depend on it.
 
 ## Install
 
@@ -124,6 +124,35 @@ The extractors take entries and yield typed facts in file order: `prompts()`, `a
 
 `sessions_containing()` finds the sessions whose main transcript, subagent transcripts or tool results contain every term (or any, with `match_any=True`). It is literal and ignores case, and it reads raw bytes, so it also matches ids and tool output. It does not need ripgrep. An ASCII term ignores ASCII case only, which keeps it fast; a term with other characters is compared after Unicode case folding, several times slower. `workers=` scans in several processes.
 
+### Hooks
+
+`cc_blackbox.hooks` is for writing [Claude Code hooks](https://code.claude.com/docs/en/hooks) in Python. It parses the JSON a hook gets on stdin into one typed class per event, builds the reply from typed constructors, and runs the two with a defined failure policy. This PreToolUse hook denies one kind of Bash command and has no opinion on the rest:
+
+```python
+from cc_blackbox.hooks import PreToolUseInput, PreToolUseReply, ShellInput, run_hook
+
+
+def guard(event: PreToolUseInput) -> PreToolUseReply | None:
+    command = event.typed_tool_input()
+    if isinstance(command, ShellInput) and command.command.startswith("glab ci view"):
+        return PreToolUseReply.deny("Use `glab-pipeline inspect` instead.")
+    return None  # no output: the normal permission flow decides
+
+
+if __name__ == "__main__":
+    run_hook(guard, expect=PreToolUseInput)
+```
+
+Register the script as a `command` hook on `PreToolUse` with the matcher `Bash`. One script can serve several events: drop `expect=` and `match` on the event class in the handler. `run_hook(first, second, ...)` calls several handlers in order until one returns a reply, so one small entry point can cover several rule sets, each importing what it needs only when it runs.
+
+- **Input.** All 33 events of the hooks reference have a class, such as `PreToolUseInput`, `StopInput` or `SessionStartInput`. An unknown event becomes `UnknownHookInput`. Unknown fields stay in `raw`, and a field with an unexpected type reads as `None` and is named in `type_mismatches`. `tool_input` is a read-only mapping. `typed_tool_input()` gives a typed view for the documented built-in tools: `ShellInput` for Bash and PowerShell, and `ReadInput`, `WriteInput`, `EditInput`, `GlobInput`, `GrepInput`, `WebFetchInput`, `WebSearchInput` and `AgentInput`.
+- **Replies.** Each event that can decide something has a reply class with named constructors, such as `PreToolUseReply.deny(reason)`, `StopReply.block(reason)` or `SessionStartReply(additional_context=...)`. A combination Claude Code rejects or ignores raises `ValueError`, such as a deny without a reason. `HookReply(system_message=...)` fits any event, and `RawReply` writes a mapping as given, for fields this library does not model yet.
+- **Exit codes.** Replies answer with exit 0 and JSON. JSON wins the `deny > defer > ask > allow` vote between parallel hooks, and JSON next to an exit-2 block cannot change the outcome. Only the TaskCompleted and TeammateIdle blocks exit 2, and a WorktreeRemove failure exits 1, because those events read nothing else.
+- **An allow is weaker than it looks.** An explicit allow skips the user's prompt and overrides other hooks' asks, so return `None` when the hook has no opinion. In auto mode, Claude Code still sends an allowed call to its classifier. A deny rule in the user's settings still beats a hook's allow.
+- **Failures.** If the payload cannot be read, a handler raises, or a reply is for another event, the default policy `on_error="pass"` prints nothing and exits 1. Claude Code then shows a hook error notice with the first stderr line and goes ahead. `on_error="block"` writes the event's blocking reply, such as a deny, and `on_error="ask"` sends PreToolUse calls to the permission prompt. A crash before Python runs your code, such as a missing interpreter or a broken install, is out of the library's reach. A hook that must fail closed therefore also sets `"onFailure": "block"` on its hook entry.
+- **Import time.** A hook process starts before every tool call it matches. `cc_blackbox` and `cc_blackbox.hooks` load their names on first use, and parsing a payload imports only its event's module. A PreToolUse hook built on `run_hook()` loads none of the session, transcript or messaging code, and takes about 10 ms more than `python -c "import json, dataclasses"`. Keep your own heavy imports inside the handler.
+- **Links.** `event.transcript()` reads the session's transcript, and `event.active_session()` finds the running session, for example to message it later. Both import the rest of the library only when called. The transcript can lag the conversation: on Stop and SubagentStop, read `last_assistant_message` instead.
+
 ## Limitations
 
 - **This is an undocumented, reverse-engineered interface.** Any Claude Code release can change the record format, the socket protocol or the feature flags behind them. The library parses records tolerantly and checks what each session declares, see [Compatibility](#compatibility). Pin a tag and upgrade on purpose.
@@ -131,6 +160,7 @@ The extractors take entries and yield typed facts in file order: `prompts()`, `a
 - **A session in bypass-permissions mode holds peer messages** until its user approves each one. A tool that messages such a session looks silent until then.
 - **The receiver does not verify the sender.** Any process of the same user can connect to the socket and claim any name. Do not put another session's name or address into your messages.
 - **Messages always reach the main session.** A subagent cannot be addressed.
+- **Hooks are the one documented interface here.** The library still parses hook input tolerantly, because the hooks reference adds events and fields often. The tests check every reply against the output schema of Claude Code 2.1.319.
 - **Transcripts are internal to Claude Code.** Anthropic documents the format as unstable. Claude Code also deletes transcripts older than its `cleanupPeriodDays` setting, 30 days by default.
 
 ### Compatibility
@@ -165,11 +195,13 @@ uv run mypy
 uv run pytest
 ```
 
+`uv run pytest -m perf -s` also measures how long a PreToolUse hook built on `run_hook()` takes, against `python -c "import json, dataclasses"`. Run it before a release; wall-clock time on a shared CI runner is too noisy to gate the build on.
+
 The tests build config dirs with anonymised session records and transcripts in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code.
 
 ### Live contract test
 
-The live contract test checks that the installed Claude Code still matches what cc-blackbox expects. Run it after a Claude Code update, and add the version to `TESTED_CLAUDE_CODE_VERSIONS` when it passes:
+The live contract tests check that the installed Claude Code still matches what cc-blackbox expects. Run it after a Claude Code update, and add the version to `TESTED_CLAUDE_CODE_VERSIONS` when it passes:
 
 ```shell
 uv run pytest -m live -s
@@ -177,9 +209,11 @@ uv run pytest -m live -s
 
 The test starts a headless session with `claude -p` in a temporary directory and a socket path of its own, using the profile in your `CLAUDE_CONFIG_DIR`. It waits for the session's registry record, checks `check_compatibility()`, sends a marker message, and checks that the reply repeats it. Then it reads the session's transcript, checks that it is aligned, that the marker arrived as a prompt from a peer, and that the reply is assistant text. Then it stops the session and deletes the transcript.
 
+A second test registers a PreToolUse hook built on `run_hook()` through `--settings`, and asks a headless session to run `touch ran`, which an allow rule would let through. It checks that the hook's deny kept the file from being created, that the tool result carries the deny reason, and that the real payload parsed with no type mismatches.
+
 - It needs the `claude` CLI on `PATH`, logged in.
-- It spends model usage: two short turns on `haiku`. Set `CC_BLACKBOX_LIVE_MODEL` to use another model.
-- The default `pytest` run and CI skip it.
+- It spends model usage: three short turns on `haiku`, about 0.004 USD in total. Set `CC_BLACKBOX_LIVE_MODEL` to use another model.
+- The default `pytest` run and CI skip them.
 
 ## License
 
