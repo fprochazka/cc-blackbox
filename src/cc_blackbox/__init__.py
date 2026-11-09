@@ -6,6 +6,13 @@ that can change in any Claude Code release.
 Everything importable from this package is the public API. Submodules are implementation details.
 """
 
+from cc_blackbox.compatibility import (
+    SUPPORTED_PEER_PROTOCOLS,
+    TESTED_CLAUDE_CODE_VERSIONS,
+    Compatibility,
+    CompatibilityFeature,
+    check_compatibility,
+)
 from cc_blackbox.errors import (
     AmbiguousSession,
     AuthSwitchConfigError,
@@ -56,6 +63,8 @@ __all__ = [
     "AuthSwitchProfile",
     "ClaudeBlackboxError",
     "ClaudeProfile",
+    "Compatibility",
+    "CompatibilityFeature",
     "MessageTooLarge",
     "MessagingError",
     "MessagingTarget",
@@ -64,13 +73,16 @@ __all__ = [
     "ProfileNotFound",
     "ProfileSource",
     "RateLimitedSender",
+    "SUPPORTED_PEER_PROTOCOLS",
     "SentMessage",
     "SessionGone",
     "SessionKind",
     "SessionNotFound",
     "SessionStatus",
+    "TESTED_CLAUDE_CODE_VERSIONS",
     "UnsupportedProtocol",
     "build_envelope",
+    "check_compatibility",
     "claude_tmp_root",
     "current_profile",
     "current_session",

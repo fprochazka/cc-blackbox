@@ -14,6 +14,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
+from cc_blackbox.compatibility import Compatibility, check_compatibility
 from cc_blackbox.errors import AmbiguousSession, SessionNotFound
 from cc_blackbox.paths import node_tmpdir, scratchpad_dir
 from cc_blackbox.profiles import ClaudeProfile, current_profile, get_profile, list_profiles
@@ -34,8 +35,6 @@ SessionStatus = Literal["busy", "shell", "idle", "waiting"]
 
 SessionKind = Literal["interactive", "bg", "daemon", "daemon-worker"]
 """The kinds Claude Code 2.1 writes. :attr:`ActiveSession.kind` keeps any other string as it is."""
-
-SUPPORTED_PEER_PROTOCOL = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,11 +90,17 @@ class ActiveSession:
         return f"{self.profile.name}/{self.name}" if self.name else f"{self.profile.name}/pid:{self.pid}"
 
     @property
+    def compatibility(self) -> Compatibility:
+        """Whether the session's record provides what each feature of this package needs; see
+        :func:`check_compatibility`."""
+        return check_compatibility(self)
+
+    @property
     def can_receive_messages(self) -> bool:
-        """Whether the record names a socket that exists and speaks the peer protocol version the SDK supports."""
+        """Whether messaging is aligned (see :attr:`compatibility`) and the socket file exists."""
         return (
             self.messaging_socket is not None
-            and self.peer_protocol == SUPPORTED_PEER_PROTOCOL
+            and self.compatibility.features["messaging"]
             and os.path.exists(self.messaging_socket)
         )
 

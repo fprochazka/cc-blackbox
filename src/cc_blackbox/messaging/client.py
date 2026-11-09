@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from cc_blackbox.compatibility import SUPPORTED_PEER_PROTOCOLS
 from cc_blackbox.errors import MessagingUnavailable, UnsupportedProtocol
 from cc_blackbox.messaging.protocol import (
     Priority,
@@ -18,7 +19,7 @@ from cc_blackbox.messaging.protocol import (
     percent_encode_address,
 )
 from cc_blackbox.messaging.transport import default_transport
-from cc_blackbox.sessions.active import SUPPORTED_PEER_PROTOCOL, ActiveSession
+from cc_blackbox.sessions.active import ActiveSession
 
 __all__ = [
     "MessagingTarget",
@@ -44,15 +45,13 @@ class SentMessage:
 def _socket_path(target: MessagingTarget) -> str:
     if not isinstance(target, ActiveSession):
         return os.fspath(target)
-    if target.messaging_socket is None:
-        raise MessagingUnavailable(
-            f"The session {target.address} has messaging turned off; its record names no socket."
-        )
-    if target.peer_protocol != SUPPORTED_PEER_PROTOCOL:
-        raise UnsupportedProtocol(
-            f"The session {target.address} speaks peer protocol {target.peer_protocol}, and this SDK speaks only "
-            f"protocol {SUPPORTED_PEER_PROTOCOL}. Upgrade the SDK, or pass the socket path to send anyway."
-        )
+    compatibility = target.compatibility
+    if not compatibility.features["messaging"]:
+        reasons = " ".join(r for r in compatibility.reasons if r.startswith("messaging:"))
+        if target.messaging_socket is None and target.peer_protocol in SUPPORTED_PEER_PROTOCOLS:
+            raise MessagingUnavailable(f"The session {target.address} cannot receive messages. {reasons}")
+        raise UnsupportedProtocol(f"The session {target.address} is not compatible with cc-blackbox. {reasons}")
+    assert target.messaging_socket is not None
     return os.fspath(target.messaging_socket)
 
 
@@ -83,12 +82,13 @@ def send_message(
     (see :func:`build_envelope`), and the receiver's terminal shows the message under that name. Without it, the
     content arrives as it is and the model does not learn who sent it.
 
-    A ``target`` that is an :class:`ActiveSession` must name a socket and speak peer protocol 1. A path is used as it
-    is.
+    A ``target`` that is an :class:`ActiveSession` must be aligned for messaging (see :func:`check_compatibility`);
+    its Claude Code version does not matter. A path is used as it is.
 
     Raises:
         MessagingUnavailable: the session has messaging turned off, or the platform is Windows.
-        UnsupportedProtocol: the session speaks a peer protocol other than 1.
+        UnsupportedProtocol: the session's messaging is not aligned with this package, see
+            :func:`check_compatibility`. The message lists the reasons.
         MessageTooLarge: the frame exceeds 1 MiB; nothing was sent.
         SessionGone: nobody listens on the socket.
         MessagingError: any other failure to write.

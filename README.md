@@ -87,11 +87,25 @@ Each profile has a name that is unique in the result and stable across runs. A d
 
 ## Limitations
 
-- **This is an undocumented, reverse-engineered interface.** Any Claude Code release can change the record format, the socket protocol or the feature flags behind them. The SDK parses records tolerantly, and sends only to sessions that declare peer protocol 1; others raise `UnsupportedProtocol`. Pin a tag and upgrade on purpose.
+- **This is an undocumented, reverse-engineered interface.** Any Claude Code release can change the record format, the socket protocol or the feature flags behind them. The library parses records tolerantly and checks what each session declares, see [Compatibility](#compatibility). Pin a tag and upgrade on purpose.
 - **Delivery is best effort.** The receiver never answers on the socket, so a successful send means only that the bytes were written. The receiver then drops a message without telling you when its sender exceeds 30 messages in a burst or one every 2 seconds, when the same text arrived in the last 30 seconds, or when 50 messages already wait in its queue. Put a sequence number or a time into each message so that two real events with the same text both arrive.
 - **A session in bypass-permissions mode holds peer messages** until its user approves each one. A tool that messages such a session looks silent until then.
 - **The receiver does not verify the sender.** Any process of the same user can connect to the socket and claim any name. Do not put another session's name or address into your messages.
 - **Messages always reach the main session.** A subagent cannot be addressed.
+
+### Compatibility
+
+cc-blackbox has its own version numbers and never compares Claude Code versions. Claude Code updates more often than the tools built on this library, so a session running a newer Claude Code is fine as long as what it declares is aligned: if the protocol is aligned, it just works.
+
+`check_compatibility(session)`, also available as `session.compatibility`, checks each feature against the session's registry record:
+
+- `messaging` needs a `peerProtocol` this version speaks (currently 1) and a `messagingSocketPath`.
+- `scratchpad` needs the `sessionId` and `cwd` strings.
+- `liveness` needs the `pid`, and on Linux the `procStart` string.
+
+New record fields and new peer features are additions and do not count against a session. `send_message()` raises `UnsupportedProtocol`, with the reasons, only when `messaging` is not aligned. Nothing else warns.
+
+`TESTED_CLAUDE_CODE_VERSIONS` lists the Claude Code versions this release was tested against: 2.1.319. It is information only.
 
 ### Platform support
 
