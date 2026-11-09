@@ -43,6 +43,7 @@ from cc_blackbox.transcripts.layout import (
     is_session_file_name,
     is_session_id,
     list_projects_dirs,
+    project_dirs_for,
     session_id_for_path,
 )
 from cc_blackbox.transcripts.markup import (
@@ -103,6 +104,7 @@ __all__ = [
     "iter_entries",
     "list_projects_dirs",
     "parse_user_markup",
+    "project_dirs_for",
     "prompt_from",
     "prompts",
     "session_id_for_path",

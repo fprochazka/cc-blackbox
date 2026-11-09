@@ -12,6 +12,8 @@ from cc_blackbox import (
     is_session_id,
     list_profiles,
     list_projects_dirs,
+    project_dirs_for,
+    project_slug,
     session_id_for_path,
 )
 
@@ -79,3 +81,27 @@ def test_an_unknown_profile_name_raises(home: Path) -> None:
     make_profile_dir(home / ".claude")
     with pytest.raises(ProfileNotFound):
         list_projects_dirs(["nope"])
+
+
+def test_project_dirs_for_a_symlinked_cwd_try_the_resolved_spelling_first(home: Path, tmp_path: Path) -> None:
+    shared = home / "shared-projects"
+    shared.mkdir()
+    make_profile_dir(home / ".claude")
+    (home / ".claude" / "projects").symlink_to(shared)
+    real = (tmp_path / "real" / "repo").resolve()
+    real.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real.parent)
+    cwd = tmp_path / "link" / "repo"
+    (shared / project_slug(real)).mkdir()
+    (shared / project_slug(cwd)).mkdir()
+
+    assert project_dirs_for(cwd) == [shared / project_slug(real), shared / project_slug(cwd)]
+    assert project_dirs_for(real) == [shared / project_slug(real)]
+    assert project_dirs_for(cwd, projects_dirs=[home / ".claude" / "projects"])[0] == shared / project_slug(real)
+
+
+def test_project_dirs_for_a_cwd_without_sessions_is_empty(home: Path, tmp_path: Path) -> None:
+    make_profile_dir(home / ".claude")
+    (home / ".claude" / "projects" / "-elsewhere").mkdir(parents=True)
+    (home / ".claude" / "projects" / f"{project_slug(tmp_path)}-sub").mkdir()
+    assert project_dirs_for(tmp_path) == []

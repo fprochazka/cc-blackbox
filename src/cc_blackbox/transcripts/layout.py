@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cc_blackbox.paths import project_slug
 from cc_blackbox.profiles import ClaudeProfile, resolve_profiles
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "is_session_file_name",
     "is_session_id",
     "list_projects_dirs",
+    "project_dirs_for",
     "session_id_for_path",
 ]
 
@@ -101,6 +103,31 @@ def cwd_spellings(cwd: str | os.PathLike[str]) -> list[Path]:
     lexical = Path(os.path.abspath(os.path.expanduser(os.fspath(cwd))))
     real = Path(os.path.realpath(lexical))
     return [real] if real == lexical else [real, lexical]
+
+
+def project_dirs_for(
+    cwd: str | os.PathLike[str],
+    profiles: Iterable[str | ClaudeProfile] | None = None,
+    *,
+    projects_dirs: Iterable[str | os.PathLike[str]] | None = None,
+) -> list[Path]:
+    """Return the existing project dirs that hold sessions launched in ``cwd``, in the projects dirs of ``profiles``.
+
+    ``profiles`` and ``projects_dirs`` select the projects dirs as in :func:`list_projects_dirs`. In each, the dir named
+    by :func:`~cc_blackbox.project_slug` of the resolved ``cwd`` comes first, then the one of ``cwd`` as given, see
+    :func:`cwd_spellings`. Only exact slugs are returned, not the dirs of sessions launched below ``cwd``.
+
+    The result can miss a session of ``cwd``: one resumed from another dir stays in that dir's project dir, and with
+    ``CLAUDE_CONFIG_DIR`` set, Claude Code uses ``$CLAUDE_CODE_PROJECT_DIR_NAME`` as the dir name when that is set.
+
+    Raises:
+        ProfileNotFound: a string entry of ``profiles`` names no known profile.
+    """
+    slugs = list(dict.fromkeys(project_slug(spelling) for spelling in cwd_spellings(cwd)))
+    found: list[Path] = []
+    for projects_dir in list_projects_dirs(profiles, paths=projects_dirs):
+        found.extend(d for slug in slugs if (d := projects_dir.path / slug).is_dir())
+    return found
 
 
 def session_id_for_path(path: str | os.PathLike[str], projects_dir: str | os.PathLike[str]) -> str | None:
