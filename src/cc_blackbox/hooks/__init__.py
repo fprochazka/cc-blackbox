@@ -30,6 +30,11 @@ if TYPE_CHECKING:
         parse_hook_input,
         read_hook_input,
     )
+    from cc_blackbox.hooks._run import (
+        FailurePolicy,
+        handle_hook,
+        run_hook,
+    )
     from cc_blackbox.hooks._session_events import (
         CompactTrigger,
         ConfigChangeInput,
@@ -135,6 +140,7 @@ __all__ = [
     "ElicitationReply",
     "ElicitationResultInput",
     "ElicitationResultReply",
+    "FailurePolicy",
     "FileChangedInput",
     "FileChangedReply",
     "GlobInput",
@@ -212,8 +218,10 @@ __all__ = [
     "WorktreeRemoveInput",
     "WorktreeRemoveReply",
     "WriteInput",
+    "handle_hook",
     "parse_hook_input",
     "read_hook_input",
+    "run_hook",
 ]
 
 _EXPORTS: dict[str, str] = {
@@ -229,6 +237,9 @@ _EXPORTS: dict[str, str] = {
     "UnknownHookInput": "cc_blackbox.hooks._base",
     "parse_hook_input": "cc_blackbox.hooks._base",
     "read_hook_input": "cc_blackbox.hooks._base",
+    "FailurePolicy": "cc_blackbox.hooks._run",
+    "handle_hook": "cc_blackbox.hooks._run",
+    "run_hook": "cc_blackbox.hooks._run",
     "CompactTrigger": "cc_blackbox.hooks._session_events",
     "ConfigChangeInput": "cc_blackbox.hooks._session_events",
     "ConfigChangeReply": "cc_blackbox.hooks._session_events",
