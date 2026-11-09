@@ -2,11 +2,11 @@
 
 # cc-blackbox
 
-"cc" stands for Claude Code. cc-blackbox is a typed Python library for tools that work next to a running [Claude Code](https://code.claude.com): find the Claude Code profiles on the machine, list the sessions that run under them, and send a message into one of them.
+"cc" stands for Claude Code. cc-blackbox is a typed Python library for tools that work next to [Claude Code](https://code.claude.com): find the Claude Code profiles on the machine, list the sessions that run under them, send a message into one of them, and read what past and running sessions recorded in their transcripts.
 
 A typical user is a background watcher started from a Claude Code session, for example one that polls CI and tells the session when a pipeline fails.
 
-Claude Code does not document any of this. The library reads the files Claude Code writes and speaks the socket protocol Claude Code uses between its own sessions, as found in Claude Code 2.1.x. Read [Limitations](#limitations) before you depend on it.
+Claude Code does not document any of this. The library reads the files Claude Code writes and speaks the socket protocol Claude Code uses between its own sessions, as found in Claude Code 2.1.x. It never writes to a transcript. Read [Limitations](#limitations) before you depend on it.
 
 ## Install
 
@@ -89,6 +89,41 @@ Each profile has a name that is unique in the result and stable across runs. A d
 - `RateLimitedSender` stays below the receiver's rate limit and joins queued messages into one.
 - `rename_session()` asks a session to rename itself.
 
+### Transcripts
+
+Claude Code writes every session to `<config dir>/projects/<slug>/<session id>.jsonl`, where `<slug>` is the launch directory with every non-alphanumeric character replaced by `-`. Subagent transcripts and large tool results sit under `<slug>/<session id>/`. `list_session_transcripts()` lists the sessions of every profile, reading only the start and the end of each file:
+
+```python
+from cc_blackbox import list_session_transcripts, sessions_containing, shell_commands, tool_calls
+
+sessions = list_session_transcripts(cwd_within=["/home/me/src/my-project"])
+for session in sessions[:10]:
+    print(session.last_activity_at, session.session_id, session.title or session.first_prompt, session.cwd)
+
+for session in sessions_containing(sessions, ["flaky test"]):
+    entries = list(session.entries(types={"assistant", "user"}))
+    for command in shell_commands(entries):
+        if command.is_error:
+            print(session.session_id, command.command)
+    print(sum(1 for call in tool_calls(entries) if call.name == "Edit"), "edits")
+```
+
+- **Profiles share transcripts.** Profiles often symlink `projects/` to one directory, so a listing covers each distinct projects dir once and `session.projects_dir.profiles` names every profile that uses it. A transcript does not record which of them wrote it.
+- **Which files are sessions.** Only a file named by a session id, which is a UUID, is a session. Other tools put their own `.jsonl` files next to transcripts, and `session_id_for_path()` maps any file under a projects dir to the session that owns it, or to `None`.
+- **`cwd_within`.** It keeps the sessions launched in a dir or below it, and it reads only the project dirs whose name can belong to such a session. A session stored under a project dir of another name, for example one resumed from elsewhere, is found only by a listing without `cwd_within`.
+- **Titles.** `title` is the newest title the user set, else the newest generated title. `first_prompt` is the first prose prompt typed by a human, for sessions without a title.
+- **Running sessions.** `transcript_for(active_session)` and `active_session_for(transcript)` link the two views by session id. The registry's `cwd` changes when a session enters a worktree; the transcript's `cwd` stays the launch directory.
+
+`iter_entries()` and `session.entries()` stream the records one line at a time. `user`, `assistant`, `system` and `attachment` records get their own classes with typed content blocks, every other record type is a plain `Entry`, and `raw` always holds the whole record. With `types=`, lines that cannot hold a wanted type are skipped before they are decoded.
+
+The extractors take entries and yield typed facts in file order: `prompts()`, `assistant_texts()`, `tool_calls()` joined with their results, `subagent_runs()`, `files_touched()`, `shell_commands()`, `failures()`, `token_usage()`, `compactions()`, and `conversation()`, which is prompts, assistant text and subagent results without tool noise.
+
+- **Who sent a prompt.** `Prompt.origin` is `human`, `peer`, `task-notification` or `coordinator`. Prompts typed while Claude works are recorded as attachments, and `prompts()` returns them with `queued` set.
+- **Token usage.** Claude Code writes one record per content block and repeats the message's whole usage on each, so `token_usage()` counts a message once.
+- **Branches.** Entries come in file order, which includes branches the conversation left, for example after a rewind.
+
+`sessions_containing()` finds the sessions whose main transcript, subagent transcripts or tool results contain every term (or any, with `match_any=True`). It is literal and ignores case, and it reads raw bytes, so it also matches ids and tool output. It does not need ripgrep. An ASCII term ignores ASCII case only, which keeps it fast; a term with other characters is compared after Unicode case folding, several times slower. `workers=` scans in several processes.
+
 ## Limitations
 
 - **This is an undocumented, reverse-engineered interface.** Any Claude Code release can change the record format, the socket protocol or the feature flags behind them. The library parses records tolerantly and checks what each session declares, see [Compatibility](#compatibility). Pin a tag and upgrade on purpose.
@@ -96,6 +131,7 @@ Each profile has a name that is unique in the result and stable across runs. A d
 - **A session in bypass-permissions mode holds peer messages** until its user approves each one. A tool that messages such a session looks silent until then.
 - **The receiver does not verify the sender.** Any process of the same user can connect to the socket and claim any name. Do not put another session's name or address into your messages.
 - **Messages always reach the main session.** A subagent cannot be addressed.
+- **Transcripts are internal to Claude Code.** Anthropic documents the format as unstable. Claude Code also deletes transcripts older than its `cleanupPeriodDays` setting, 30 days by default.
 
 ### Compatibility
 
@@ -108,6 +144,8 @@ cc-blackbox has its own version numbers and never compares Claude Code versions.
 - `liveness` needs the `pid`, and on Linux the `procStart` string.
 
 New record fields and new peer features are additions and do not count against a session. `send_message()` raises `UnsupportedProtocol`, with the reasons, only when `messaging` is not aligned. Nothing else warns.
+
+Transcripts carry no protocol number, so their check looks at the records. Pass a `ReadDiagnostics` to `iter_entries()`: `aligned` is `False` only when a field the library models, such as `message.content`, has an unexpected type. Malformed lines, unknown record types and unknown content blocks are counted but never raise and never count against alignment, because Claude Code adds record types every few releases.
 
 `TESTED_CLAUDE_CODE_VERSIONS` lists the Claude Code versions that the [live contract test](#live-contract-test) passed against: 2.1.319. It is information only.
 
@@ -127,7 +165,7 @@ uv run mypy
 uv run pytest
 ```
 
-The tests build config dirs with anonymised session records in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code.
+The tests build config dirs with anonymised session records and transcripts in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code.
 
 ### Live contract test
 
@@ -137,7 +175,7 @@ The live contract test checks that the installed Claude Code still matches what 
 uv run pytest -m live -s
 ```
 
-The test starts a headless session with `claude -p` in a temporary directory and a socket path of its own, using the profile in your `CLAUDE_CONFIG_DIR`. It waits for the session's registry record, checks `check_compatibility()`, sends a marker message, and checks that the marker is in the session's transcript and in its reply. Then it stops the session and deletes the transcript.
+The test starts a headless session with `claude -p` in a temporary directory and a socket path of its own, using the profile in your `CLAUDE_CONFIG_DIR`. It waits for the session's registry record, checks `check_compatibility()`, sends a marker message, and checks that the reply repeats it. Then it reads the session's transcript, checks that it is aligned, that the marker arrived as a prompt from a peer, and that the reply is assistant text. Then it stops the session and deletes the transcript.
 
 - It needs the `claude` CLI on `PATH`, logged in.
 - It spends model usage: two short turns on `haiku`. Set `CC_BLACKBOX_LIVE_MODEL` to use another model.
