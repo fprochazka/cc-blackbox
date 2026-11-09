@@ -1,4 +1,4 @@
-"""Typed access to a running Claude Code (cc): profiles, active sessions and cross-session messaging.
+"""Typed access to a running Claude Code (cc): profiles, active sessions, transcripts and cross-session messaging.
 
 Unofficial and not affiliated with or endorsed by Anthropic. The package relies on undocumented Claude Code internals
 that can change in any Claude Code release.
@@ -54,6 +54,13 @@ from cc_blackbox.sessions import (
     find_session,
     list_active_sessions,
 )
+from cc_blackbox.transcripts import (
+    ProjectsDir,
+    is_session_file_name,
+    is_session_id,
+    list_projects_dirs,
+    session_id_for_path,
+)
 
 __all__ = [
     "ActiveSession",
@@ -72,6 +79,7 @@ __all__ = [
     "Priority",
     "ProfileNotFound",
     "ProfileSource",
+    "ProjectsDir",
     "RateLimitedSender",
     "SUPPORTED_PEER_PROTOCOLS",
     "SentMessage",
@@ -88,14 +96,18 @@ __all__ = [
     "current_session",
     "find_session",
     "get_profile",
+    "is_session_file_name",
+    "is_session_id",
     "list_active_sessions",
     "list_profiles",
+    "list_projects_dirs",
     "percent_encode_address",
     "project_slug",
     "read_auth_switch_config",
     "rename_session",
     "scratchpad_dir",
     "send_message",
+    "session_id_for_path",
 ]
 
 __version__ = "0.2.0"

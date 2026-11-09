@@ -17,7 +17,7 @@ from typing import Any, Literal
 from cc_blackbox.compatibility import Compatibility, check_compatibility
 from cc_blackbox.errors import AmbiguousSession, SessionNotFound
 from cc_blackbox.paths import node_tmpdir, scratchpad_dir
-from cc_blackbox.profiles import ClaudeProfile, current_profile, get_profile, list_profiles
+from cc_blackbox.profiles import ClaudeProfile, current_profile, resolve_profiles
 from cc_blackbox.sessions.liveness import is_session_process_alive
 from cc_blackbox.sessions.registry import RecordFile, read_records
 
@@ -233,18 +233,7 @@ def list_active_sessions(
     Raises:
         ProfileNotFound: a string entry names no known profile.
     """
-    if profiles is None:
-        selected = list_profiles()
-    else:
-        known: list[ClaudeProfile] | None = None
-        selected = []
-        for entry in profiles:
-            if isinstance(entry, str):
-                known = list_profiles() if known is None else known
-                selected.append(get_profile(entry, profiles=known))
-            else:
-                selected.append(entry)
-
+    selected = resolve_profiles(profiles)
     oldest = datetime.min.replace(tzinfo=UTC)
     result: list[tuple[int, ActiveSession]] = []
     for index, profile in enumerate(selected):

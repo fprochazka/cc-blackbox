@@ -253,6 +253,25 @@ def list_profiles(config_dirs: Iterable[str | os.PathLike[str]] | None = None) -
     return _assign_names(candidates, config.profiles if config is not None else ())
 
 
+def resolve_profiles(profiles: Iterable[str | ClaudeProfile] | None) -> list[ClaudeProfile]:
+    """Return ``profiles`` with each name looked up, or every profile from :func:`list_profiles` when it is ``None``.
+
+    Raises:
+        ProfileNotFound: a string entry names no known profile.
+    """
+    if profiles is None:
+        return list_profiles()
+    known: list[ClaudeProfile] | None = None
+    selected: list[ClaudeProfile] = []
+    for entry in profiles:
+        if isinstance(entry, str):
+            known = list_profiles() if known is None else known
+            selected.append(get_profile(entry, profiles=known))
+        else:
+            selected.append(entry)
+    return selected
+
+
 def get_profile(name: str, *, profiles: Sequence[ClaudeProfile] | None = None) -> ClaudeProfile:
     """Return the profile called ``name`` from ``profiles``, which defaults to :func:`list_profiles`.
 
