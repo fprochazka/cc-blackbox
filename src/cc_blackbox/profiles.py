@@ -52,7 +52,14 @@ class ClaudeProfile:
 
     name: str
     config_dir: Path
-    """Absolute and symlink-resolved."""
+    """Absolute and symlink-resolved, so profiles reached through different symlinks compare equal.
+
+    Claude Code uses ``$CLAUDE_CONFIG_DIR`` as given, without resolving symlinks. Passing this path or a symlink to it
+    makes Claude Code read and write the same files, and the project slugs do not change, because Claude Code derives
+    them from the session's cwd alone. Only the paths Claude Code reports start differently, such as the
+    ``transcript_path`` a hook receives. Setting ``CLAUDE_CONFIG_DIR`` to the ``default`` profile's dir is not the same
+    as leaving it unset, see :attr:`claude_json`.
+    """
     source: ProfileSource
     description: str | None = None
     """The description from the auth-switch config, if any."""
@@ -74,7 +81,9 @@ class ClaudeProfile:
         """The profile's global ``.claude.json``.
 
         For ``~/.claude`` this is ``~/.claude.json``, next to the dir, because Claude Code puts it there when
-        ``CLAUDE_CONFIG_DIR`` is unset. For every other dir it is inside the dir.
+        ``CLAUDE_CONFIG_DIR`` is unset. For every other dir it is inside the dir. A Claude Code started with
+        ``CLAUDE_CONFIG_DIR=~/.claude`` reads ``~/.claude/.claude.json`` instead, so it does not see the default
+        profile's login and settings from ``~/.claude.json``.
         """
         if self.config_dir == _realpath(default_config_dir()):
             return Path.home() / ".claude.json"

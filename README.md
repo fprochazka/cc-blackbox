@@ -72,6 +72,12 @@ Claude Code reads its config dir from `CLAUDE_CONFIG_DIR`, or uses `~/.claude`. 
 
 Each profile has a name that is unique in the result and stable across runs. A dir whose basename clashes with another name gets `cfg-<8 hex chars>`.
 
+`profile.config_dir` is the symlink-resolved path. You can pass it to `claude` as `CLAUDE_CONFIG_DIR`:
+
+- **Symlinks change nothing on disk.** Claude Code uses `CLAUDE_CONFIG_DIR` as given, without resolving symlinks. The resolved path and a symlink to it reach the same files. The project slug comes from the session's cwd alone, so the config dir's spelling does not change it. Only the paths Claude Code reports start with the spelling it got, such as a hook's `transcript_path`.
+- **`~/.claude` is the exception.** With `CLAUDE_CONFIG_DIR` unset, Claude Code keeps its global config in `~/.claude.json`, next to the dir. With `CLAUDE_CONFIG_DIR=~/.claude` it reads `~/.claude/.claude.json` instead. To run under the `default` profile, leave the variable unset.
+- **`CLAUDE_CODE_PROJECT_DIR_NAME`.** When `CLAUDE_CONFIG_DIR` is set, Claude Code names the project dir after this variable instead of the slug, when it holds 1 to 64 letters, digits, `-` or `_`. `find_session_transcript()` still finds such a session by scanning every project dir.
+
 ### Sessions
 
 `list_active_sessions()` reads `<config dir>/sessions/<pid>.json`, which every running session writes, and drops records whose process has ended. Every field except the pid can be `None`, because the record shape changes between Claude Code versions. `session.raw` holds the whole record.
