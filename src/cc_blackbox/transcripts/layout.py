@@ -89,6 +89,20 @@ def list_projects_dirs(
     return [ProjectsDir(path, tuple(members)) for path, members in grouped.items()]
 
 
+def cwd_spellings(cwd: str | os.PathLike[str]) -> list[Path]:
+    """Return the spellings of ``cwd`` that can name its project dir: the symlink-resolved path, then ``cwd`` as given
+    when that differs.
+
+    Claude Code names the project dir after its ``process.cwd()``, which the OS reports with symlinks resolved, so a
+    session started in a symlinked dir sits under the slug of the resolved path. Callers often hold the path through
+    the symlink. The given spelling stays a candidate because not every way of setting a session's cwd is known to
+    resolve it. Both are user-expanded and absolute.
+    """
+    lexical = Path(os.path.abspath(os.path.expanduser(os.fspath(cwd))))
+    real = Path(os.path.realpath(lexical))
+    return [real] if real == lexical else [real, lexical]
+
+
 def session_id_for_path(path: str | os.PathLike[str], projects_dir: str | os.PathLike[str]) -> str | None:
     """Return the id of the session that owns ``path``, a file or dir under ``projects_dir``.
 

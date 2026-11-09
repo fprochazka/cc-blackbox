@@ -139,6 +139,15 @@ def test_cwd_within_finds_dirs_whose_slug_was_cut_to_200_characters(projects: Pa
     assert [t.cwd for t in list_session_transcripts(cwd_within=[root])] == [Path(cwd)]
 
 
+def test_cwd_within_a_symlinked_dir_finds_sessions_under_the_resolved_path(projects: Path, tmp_path: Path) -> None:
+    real = (tmp_path / "real" / "example").resolve()
+    real.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real.parent)
+    write_transcript(projects, [user("hi", cwd=str(real))], cwd=str(real))
+    assert [t.cwd for t in list_session_transcripts(cwd_within=[link / "example"])] == [real]
+
+
 def test_a_transcript_without_cwd_is_kept_only_in_the_exact_dir(projects: Path) -> None:
     root = "/home/user/projects/example"
     write_transcript(projects, [bookkeeping("ai-title", aiTitle="t")], session_id=session_id(1), cwd=root)

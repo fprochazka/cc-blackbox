@@ -16,7 +16,13 @@ from cc_blackbox.paths import project_slug, untruncated_slug
 from cc_blackbox.profiles import ClaudeProfile
 from cc_blackbox.sessions.active import ActiveSession, list_active_sessions
 from cc_blackbox.transcripts.entries import Entry, ReadDiagnostics, parse_entry, parse_timestamp
-from cc_blackbox.transcripts.layout import ProjectsDir, is_session_file_name, is_session_id, list_projects_dirs
+from cc_blackbox.transcripts.layout import (
+    ProjectsDir,
+    cwd_spellings,
+    is_session_file_name,
+    is_session_id,
+    list_projects_dirs,
+)
 from cc_blackbox.transcripts.prompts import prompt_from
 from cc_blackbox.transcripts.reader import iter_entries
 
@@ -301,8 +307,9 @@ def list_session_transcripts(
     ``profiles`` and ``projects_dirs`` select the projects dirs as in :func:`~cc_blackbox.list_projects_dirs`. Stubs
     without a timestamped record come last, by mtime.
 
-    ``cwd_within`` keeps sessions launched in one of the given dirs or below it. Only project dirs whose name can be
-    the slug of such a dir are read, which makes a listing for one repo cheap. A session whose transcript sits in a
+    ``cwd_within`` keeps sessions launched in one of the given dirs or below it. A dir reached through a symlink also
+    matches under its resolved path, which is the one Claude Code records. Only project dirs whose name can be the slug
+    of such a dir are read, which makes a listing for one repo cheap. A session whose transcript sits in a
     project dir of another name, for example one resumed from elsewhere, is therefore not found this way; list
     without ``cwd_within`` and filter on :attr:`SessionTranscript.cwd` to find those. A transcript without a ``cwd``
     is kept when its dir is exactly the slug of one of the dirs.
@@ -312,7 +319,7 @@ def list_session_transcripts(
     Raises:
         ProfileNotFound: a string entry of ``profiles`` names no known profile.
     """
-    within = [_abspath(p) for p in cwd_within] if cwd_within is not None else None
+    within = list(dict.fromkeys(s for p in cwd_within for s in cwd_spellings(p))) if cwd_within is not None else None
     slugs = [untruncated_slug(p) for p in within] if within is not None else None
     exact = {project_slug(p) for p in within} if within is not None else set()
     since = active_since.timestamp() if active_since is not None else None
