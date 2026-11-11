@@ -23,7 +23,8 @@ def _proc_stat_start(pid: int) -> str | None:
 def own_pid_domain() -> str | None:
     """Return the ``pidDomain`` value Claude Code would write from this machine, or ``None`` on Windows.
 
-    On Linux it is ``linux:<machine-id>:<pid namespace>``. On macOS Claude Code writes the constant ``linux``.
+    On Linux it is ``linux:<machine-id>:<pid namespace>``. On macOS the Claude Code versions read so far write the
+    constant ``linux``, but some write ``darwin``, so the value is compared only on Linux.
     """
     if sys.platform == "win32":
         return None
@@ -40,14 +41,16 @@ def own_pid_domain() -> str | None:
 def is_session_process_alive(pid: int, proc_start: str | None, pid_domain: str | None) -> bool:
     """Return whether ``pid`` runs and is still the process that wrote the record.
 
-    A record from another pid domain (another container or pid namespace) returns ``False``, because its pid means
-    nothing here. On Linux the record's ``procStart`` must equal the current start time of ``pid``, which catches a
+    On Linux, a record from another pid domain (another container or pid namespace) returns ``False``, because its pid
+    means nothing here. Elsewhere there are no pid namespaces, and ``pidDomain`` differs between Claude Code builds,
+    so it is ignored. On Linux the record's ``procStart`` must equal the current start time of ``pid``, which catches a
     reused pid. On macOS only the pid is checked. On Windows nothing is checked and the result is ``True``:
     ``os.kill`` there terminates the process instead of probing it.
     """
     if sys.platform == "win32":
         return True
-    own_domain = own_pid_domain()
+    on_linux = sys.platform.startswith("linux")
+    own_domain = own_pid_domain() if on_linux else None
     if pid_domain is not None and own_domain is not None and pid_domain != own_domain:
         return False
     try:

@@ -22,6 +22,7 @@ from cc_blackbox import (
     list_profiles,
     scratchpad_dir,
 )
+from cc_blackbox.sessions.liveness import own_pid_domain
 
 linux_only = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
 
@@ -146,6 +147,23 @@ def test_liveness_drops_dead_and_reused_pids(profiles: list[ClaudeProfile]) -> N
     alive = list_active_sessions()
     assert [s.pid for s in alive] == [me]
     assert len(list_active_sessions(check_liveness=False)) == 3
+
+
+@pytest.mark.parametrize("pid_domain", ["darwin", "linux", "linux:another-host:pid:[1]"])
+def test_liveness_ignores_the_pid_domain_outside_linux(
+    profiles: list[ClaudeProfile], monkeypatch: pytest.MonkeyPatch, pid_domain: str
+) -> None:
+    # Claude Code on macOS writes "darwin" in some versions and "linux" in others; macOS has no pid namespaces.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    own_pid_domain.cache_clear()
+    personal = config_dir(profiles, "personal")
+    me = os.getpid()
+    write_record(personal, me, {**live_record(me), "pidDomain": pid_domain})
+
+    try:
+        assert [s.pid for s in list_active_sessions()] == [me]
+    finally:
+        own_pid_domain.cache_clear()
 
 
 @linux_only
