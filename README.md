@@ -84,7 +84,9 @@ Each profile has a name that is unique in the result and stable across runs. A d
 
 `find_session()` accepts an address (`<profile>/<name>`), a session name, a session id, `pid:<n>`, or a unique prefix of a session id. Session names are not unique: Claude Code generates names like `my-project-a1` without checking for collisions, so an ambiguous query raises `AmbiguousSession` with the candidates.
 
-`scratchpad_dir` is the session's scratchpad directory. Claude Code creates it on first use, so it may not exist yet.
+`cwd` is the session's current directory from its registry record, which changes when the session enters a worktree or runs `/cd`. `launch_cwd` is the directory the session's process started in. Claude Code does not record it in the registry, so it is read from the first transcript record that process wrote; for a resumed session that takes a few reads spread over the transcript.
+
+`scratchpad_dir` is the session's scratchpad directory, which Claude Code derives from the launch directory and keeps after `/cd`. Claude Code creates it on first use, so it may not exist yet. When the session has written no transcript record yet, `launch_cwd` is `None`, the scratchpad is derived from `cwd`, and `scratchpad_dir_inferred` is `True`.
 
 ### Messages
 
@@ -120,7 +122,7 @@ for session in sessions_containing(sessions, ["flaky test"]):
 - **Symlinked dirs.** Claude Code names the project dir after the launch dir with symlinks resolved, and records that path as `cwd`. `cwd_within` matches a dir under the spelling you pass and under its resolved path. `project_dirs_for(cwd)` returns the project dirs of one dir, the resolved spelling first.
 - **Finding one session.** `find_session_transcript(session_id)` checks every project dir of every profile. With `cwd=` set to the dir the session most likely ran in, it checks that dir's project dirs first. `find_session_transcript(session_id, ["personal"])` searches one profile, and `list_profiles([config_dir])` makes a profile of any config dir.
 - **Titles.** `title` is the newest title the user set, else the newest generated title. `first_prompt` is the first prose prompt typed by a human, for sessions without a title.
-- **Running sessions.** `transcript_for(active_session)` and `active_session_for(transcript)` link the two views by session id. The registry's `cwd` changes when a session enters a worktree; the transcript's `cwd` stays the launch directory.
+- **Running sessions.** `transcript_for(active_session)` and `active_session_for(transcript)` link the two views by session id. The registry's `cwd` changes when a session enters a worktree or runs `/cd`; the transcript's `cwd` stays the launch directory of its first run.
 
 `iter_entries()` and `session.entries()` stream the records one line at a time. `user`, `assistant`, `system` and `attachment` records get their own classes with typed content blocks, every other record type is a plain `Entry`, and `raw` always holds the whole record. With `types=`, lines that cannot hold a wanted type are skipped before they are decoded.
 

@@ -18,8 +18,10 @@ from cc_blackbox.compatibility import Compatibility, check_compatibility
 from cc_blackbox.errors import AmbiguousSession, SessionNotFound
 from cc_blackbox.paths import node_tmpdir, scratchpad_dir
 from cc_blackbox.profiles import ClaudeProfile, current_profile, resolve_profiles
+from cc_blackbox.sessions._launch import find_transcript_file, read_launch_cwd
 from cc_blackbox.sessions.liveness import is_session_process_alive
 from cc_blackbox.sessions.registry import RecordFile, read_records
+from cc_blackbox.transcripts.layout import list_projects_dirs
 
 __all__ = [
     "ActiveSession",
@@ -54,7 +56,15 @@ class ActiveSession:
     name_source: str | None
     """How the name was set: ``user``, ``peer``, ``derived``, ``collision``, ``auto`` or ``hook``."""
     cwd: Path | None
-    """The launch directory. It changes when the session moves into a worktree."""
+    """The session's current directory, as its registry record holds it. Claude Code rewrites it when the session moves
+    into a worktree or changes directory with ``/cd``, and moves the transcript to the project dir of the new one."""
+    launch_cwd: Path | None
+    """The directory the session's process was started in, which Claude Code does not record in the registry.
+
+    It is the ``cwd`` of the first transcript record written by this process: a resumed session's transcript starts
+    with the records of its earlier runs, which can be from other directories. ``None`` when the session has no
+    transcript yet, or has not written a record since it started. Reading it costs a read of the start of the
+    transcript, or for a resumed session a few reads spread over it."""
     kind: str | None
     entrypoint: str | None
     status: str | None
@@ -71,13 +81,16 @@ class ActiveSession:
     """The tmux pane as ``<session>:@<window>.%<pane>``, when the session runs in tmux."""
     bridge_session_id: str | None
     scratchpad_dir: Path | None
-    """The session's scratchpad dir. Claude Code creates it on first use, so it may not exist yet."""
+    """The session's scratchpad dir, under the project slug of :attr:`launch_cwd`. Claude Code keeps the scratchpad of
+    the launch directory when the session changes directory. It creates the dir on first use, so it may not exist
+    yet."""
     scratchpad_dir_inferred: bool
-    """``True`` when the session's temp dir is a guess based on this process's environment.
+    """``True`` when :attr:`scratchpad_dir` is a guess: its temp dir comes from this process's environment, or its
+    project slug comes from :attr:`cwd` because :attr:`launch_cwd` is unknown.
 
     The temp dir comes from ``CLAUDE_CODE_TMPDIR`` in the session's settings files, then from the environment the
     session process started with, which the SDK can read only on Linux. On macOS and Windows the value is often a
-    guess."""
+    guess. :attr:`cwd` is right unless the session changed directory before writing its first transcript record."""
     record_path: Path
     raw: Mapping[str, Any]
 
@@ -165,18 +178,35 @@ def _settings_tmpdir(profile: ClaudeProfile, cwd: Path) -> str | None:
     return None
 
 
+def _launch_cwd(profile: ClaudeProfile, record: RecordFile, cwd: Path | None, session_id: str | None) -> Path | None:
+    started_at = record.data.get("startedAt")
+    if session_id is None or isinstance(started_at, bool) or not isinstance(started_at, int | float) or started_at <= 0:
+        return None
+    # The transcript follows /cd, so the record's cwd names its project dir.
+    found = find_transcript_file(session_id, list_projects_dirs([profile]), cwd)
+    return read_launch_cwd(found[0], started_at) if found is not None else None
+
+
 def _scratchpad(
-    profile: ClaudeProfile, record: RecordFile, cwd: Path | None, session_id: str | None, *, own_env: bool
+    profile: ClaudeProfile,
+    record: RecordFile,
+    launch_cwd: Path | None,
+    cwd: Path | None,
+    session_id: str | None,
+    *,
+    own_env: bool,
 ) -> tuple[Path | None, bool]:
-    if cwd is None or session_id is None:
+    base = launch_cwd if launch_cwd is not None else cwd
+    if base is None or session_id is None:
         return None, False
     if own_env:
-        return scratchpad_dir(cwd, session_id), False
+        return scratchpad_dir(base, session_id), launch_cwd is None
     env = _read_process_environ(record.pid)
-    tmpdir = _settings_tmpdir(profile, cwd)
+    # Claude Code reads the project settings of the dir it starts in, so their env applies to the launch dir.
+    tmpdir = _settings_tmpdir(profile, base)
     if tmpdir is None and env is not None:
         tmpdir = env.get("CLAUDE_CODE_TMPDIR") or node_tmpdir(env)
-    return scratchpad_dir(cwd, session_id, tmpdir=tmpdir, uid=record.owner_uid), tmpdir is None
+    return scratchpad_dir(base, session_id, tmpdir=tmpdir, uid=record.owner_uid), tmpdir is None or launch_cwd is None
 
 
 def _to_session(profile: ClaudeProfile, record: RecordFile, *, own_env: bool = False) -> ActiveSession:
@@ -187,7 +217,8 @@ def _to_session(profile: ClaudeProfile, record: RecordFile, *, own_env: bool = F
     socket_value = _str(data, "messagingSocketPath")
     features = data.get("peerFeatures")
     peer_features = frozenset(f for f in features if isinstance(f, str)) if isinstance(features, list) else frozenset()
-    scratchpad, inferred = _scratchpad(profile, record, cwd, session_id, own_env=own_env)
+    launch_cwd = _launch_cwd(profile, record, cwd, session_id)
+    scratchpad, inferred = _scratchpad(profile, record, launch_cwd, cwd, session_id, own_env=own_env)
     return ActiveSession(
         profile=profile,
         pid=record.pid,
@@ -195,6 +226,7 @@ def _to_session(profile: ClaudeProfile, record: RecordFile, *, own_env: bool = F
         name=_str(data, "name"),
         name_source=_str(data, "nameSource"),
         cwd=cwd,
+        launch_cwd=launch_cwd,
         kind=_str(data, "kind"),
         entrypoint=_str(data, "entrypoint"),
         status=_str(data, "status"),
@@ -229,6 +261,9 @@ def list_active_sessions(
     ``check_liveness``, records whose process has ended, or whose pid was reused by another process, are left out. The
     SDK never deletes such records; sweeping them is Claude Code's job. The result is ordered by profile, in the order
     given, then by start time.
+
+    Each session's transcript is opened to find its :attr:`~ActiveSession.launch_cwd`, which takes a read of its start,
+    or a few reads spread over it for a resumed session.
 
     Raises:
         ProfileNotFound: a string entry names no known profile.
