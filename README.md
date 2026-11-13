@@ -207,6 +207,17 @@ uv run pytest
 
 The tests build config dirs with anonymised session records and transcripts in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code.
 
+### Commit hooks
+
+cc-blackbox is developed against real Claude Code config dirs, so project paths, session names and organisation names from them end up in terminals, scratch files and test runs, and from there they can slip into a commit. `scripts/hooks` holds a pre-commit and a commit-msg hook that refuse a commit when a staged line or the commit message matches a private identifier. The identifiers live in a file outside the repository, because listing them here would publish the very strings the hooks exist to keep out. Set it up once per clone:
+
+```shell
+git config core.hooksPath scripts/hooks
+git config hooks.forbiddenPatternsFile ~/.config/git/forbidden-patterns.txt  # any path outside the repo
+```
+
+The file holds one extended regex per line, matched case-insensitively; blank lines and `#` comments are ignored. Until `hooks.forbiddenPatternsFile` points at a file with at least one pattern, both hooks refuse every commit and print how to fix it. Tests and docs use generic paths such as `/home/user/project-a`.
+
 ### Live contract test
 
 The live contract tests check that the installed Claude Code still matches what cc-blackbox expects. Run it after a Claude Code update, and add the version to `TESTED_CLAUDE_CODE_VERSIONS` when it passes:
