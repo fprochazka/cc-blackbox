@@ -14,6 +14,7 @@ from typing import Any, Literal
 from cc_blackbox.errors import AuthSwitchConfigError, TranscriptNotFound
 from cc_blackbox.paths import project_slug, untruncated_slug
 from cc_blackbox.profiles import ClaudeProfile
+from cc_blackbox.sessions._launch import find_transcript_file, project_dirs
 from cc_blackbox.sessions.active import ActiveSession, list_active_sessions
 from cc_blackbox.transcripts.entries import Entry, ReadDiagnostics, parse_entry, parse_timestamp
 from cc_blackbox.transcripts.layout import (
@@ -22,7 +23,6 @@ from cc_blackbox.transcripts.layout import (
     is_session_file_name,
     is_session_id,
     list_projects_dirs,
-    project_dirs_for,
 )
 from cc_blackbox.transcripts.prompts import prompt_from
 from cc_blackbox.transcripts.reader import iter_entries
@@ -289,13 +289,6 @@ def _may_hold(dir_name: str, slug: str) -> bool:
     return dir_name == slug or dir_name.startswith(slug + "-")
 
 
-def _project_dirs(projects_dir: ProjectsDir) -> list[Path]:
-    try:
-        return sorted(p for p in projects_dir.path.iterdir() if p.is_dir())
-    except OSError:
-        return []
-
-
 def list_session_transcripts(
     profiles: Iterable[str | ClaudeProfile] | None = None,
     *,
@@ -327,7 +320,7 @@ def list_session_transcripts(
 
     found: list[SessionTranscript] = []
     for projects_dir in list_projects_dirs(profiles, paths=projects_dirs):
-        for project in _project_dirs(projects_dir):
+        for project in project_dirs(projects_dir):
             if slugs is not None and not any(_may_hold(project.name, slug) for slug in slugs):
                 continue
             try:
@@ -380,17 +373,9 @@ def find_session_transcript(
     if not is_session_id(session_id):
         raise TranscriptNotFound(f"{session_id!r} is not a session id. A session id is a UUID.")
     searched = list_projects_dirs(profiles, paths=projects_dirs)
-    if cwd is not None:
-        by_path = {d.path: d for d in searched}
-        for project in project_dirs_for(cwd, projects_dirs=by_path):
-            candidate = project / f"{session_id}.jsonl"
-            if candidate.is_file():
-                return _summarize(candidate, by_path[project.parent])
-    for projects_dir in searched:
-        for project in _project_dirs(projects_dir):
-            candidate = project / f"{session_id}.jsonl"
-            if candidate.is_file():
-                return _summarize(candidate, projects_dir)
+    found = find_transcript_file(session_id, searched, cwd)
+    if found is not None:
+        return _summarize(*found)
     where = ", ".join(str(d.path) for d in searched) or "no projects dir"
     raise TranscriptNotFound(f"No transcript of session {session_id} in {where}.")
 
