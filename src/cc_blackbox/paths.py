@@ -128,8 +128,9 @@ def scratchpad_dir(
 ) -> Path:
     """Return the scratchpad dir of the session ``session_id`` launched in ``cwd``.
 
-    ``cwd`` must be the session's launch directory, not the current directory of its shell. Claude Code creates the
-    directory on first use, so the returned path may not exist yet. ``tmpdir`` and ``uid`` work as in
-    :func:`claude_tmp_root`.
+    ``cwd`` must be the directory the session's process was started in, :attr:`~cc_blackbox.ActiveSession.launch_cwd`.
+    Neither the current directory of its shell nor its registry record's ``cwd`` will do: Claude Code 2.1.323 keeps the
+    scratchpad of the launch directory when the session moves with ``/cd``. Claude Code creates the directory on first
+    use, so the returned path may not exist yet. ``tmpdir`` and ``uid`` work as in :func:`claude_tmp_root`.
     """
     return claude_tmp_root(tmpdir=tmpdir, uid=uid) / project_slug(cwd) / session_id / "scratchpad"

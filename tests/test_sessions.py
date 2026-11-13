@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from records import SAMPLE_RECORD, dead_pid, live_record, make_profile_dir, write_record
+from transcript_records import BASE_TIME, CWD, envelope, user, write_transcript
 
 from cc_blackbox import (
     ActiveSession,
@@ -25,6 +26,26 @@ from cc_blackbox import (
 from cc_blackbox.sessions.liveness import own_pid_domain
 
 linux_only = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+
+STARTED_AT_MS = int(BASE_TIME.timestamp() * 1000)
+PROJECT_A = "/home/user/project-a"
+PROJECT_B = "/home/user/project-b"
+
+
+def write_launch_transcript(config: Path, *, cwd: str = CWD, launch_cwd: str | None = None) -> Path:
+    """Write the transcript of a session started at :data:`STARTED_AT_MS` in ``launch_cwd`` and now in ``cwd``.
+
+    Like Claude Code, it stamps the first record a few milliseconds before the registry record's startedAt, and stores
+    the file under the project dir of the current ``cwd``.
+    """
+    launched = launch_cwd if launch_cwd is not None else cwd
+    records = [
+        envelope("attachment", minutes=-0.005 / 60, cwd=launched, attachment={"type": "hook_success"}),
+        user("first prompt", minutes=1, cwd=launched),
+    ]
+    if launched != cwd:
+        records.append(user("/cd", minutes=2, cwd=cwd))
+    return write_transcript(config / "projects", records, cwd=cwd)
 
 
 @pytest.fixture
@@ -183,7 +204,9 @@ def test_scratchpad_uses_the_tmpdir_from_the_target_process_environment(
     monkeypatch.setenv("CLAUDE_CODE_TMPDIR", str(tmp_path / "own-tmp"))
     with subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], env=env) as child:
         try:
-            write_record(config_dir(profiles, "personal"), child.pid, live_record(child.pid))
+            personal = config_dir(profiles, "personal")
+            write_record(personal, child.pid, live_record(child.pid, startedAt=STARTED_AT_MS))
+            write_launch_transcript(personal)
             [session] = list_active_sessions()
         finally:
             child.kill()
@@ -255,7 +278,8 @@ def test_current_session_by_pid(
 ) -> None:
     work = config_dir(profiles, "work")
     me = os.getpid()
-    write_record(work, me, live_record(me))
+    write_record(work, me, live_record(me, cwd=PROJECT_B, startedAt=STARTED_AT_MS))
+    write_launch_transcript(work, cwd=PROJECT_B, launch_cwd=PROJECT_A)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-profiles" / "work"))
     monkeypatch.setenv("CLAUDE_PID", str(me))
     monkeypatch.setenv("CLAUDE_CODE_TMPDIR", str(tmp_path / "cc-tmp"))
@@ -265,9 +289,11 @@ def test_current_session_by_pid(
     assert session is not None
     assert session.pid == me
     assert session.profile.name == "work"
+    assert session.cwd == Path(PROJECT_B)
+    assert session.launch_cwd == Path(PROJECT_A)
     assert session.scratchpad_dir_inferred is False
     assert session.scratchpad_dir == scratchpad_dir(
-        "/home/user/projects/example", "5f0c3a52-8d4e-4c1b-9a7e-2b6d1e0f4a11", tmpdir=tmp_path / "cc-tmp"
+        PROJECT_A, "5f0c3a52-8d4e-4c1b-9a7e-2b6d1e0f4a11", tmpdir=tmp_path / "cc-tmp"
     )
 
 
@@ -297,7 +323,8 @@ def test_scratchpad_tmpdir_from_settings_files(profiles: list[ClaudeProfile], tm
     gone = dead_pid()
     project = tmp_path / "project"
     (project / ".claude").mkdir(parents=True)
-    write_record(personal, gone, {**SAMPLE_RECORD, "pid": gone, "cwd": str(project)})
+    write_record(personal, gone, {**SAMPLE_RECORD, "pid": gone, "cwd": str(project), "startedAt": STARTED_AT_MS})
+    write_launch_transcript(personal, cwd=str(project))
     session_id = SAMPLE_RECORD["sessionId"]
 
     [session] = list_active_sessions(check_liveness=False)
@@ -313,3 +340,56 @@ def test_scratchpad_tmpdir_from_settings_files(profiles: list[ClaudeProfile], tm
     )
     [session] = list_active_sessions(check_liveness=False)
     assert session.scratchpad_dir == scratchpad_dir(project, session_id, tmpdir=tmp_path / "proj")
+
+
+def test_scratchpad_follows_the_launch_cwd_after_cd(profiles: list[ClaudeProfile], tmp_path: Path) -> None:
+    personal = config_dir(profiles, "personal")
+    (personal / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_TMPDIR": str(tmp_path / "cc-tmp")}}))
+    write_record(personal, 4242, {**SAMPLE_RECORD, "pid": 4242, "cwd": PROJECT_B, "startedAt": STARTED_AT_MS})
+    write_launch_transcript(personal, cwd=PROJECT_B, launch_cwd=PROJECT_A)
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.cwd == Path(PROJECT_B)
+    assert session.launch_cwd == Path(PROJECT_A)
+    assert session.scratchpad_dir_inferred is False
+    assert session.scratchpad_dir == scratchpad_dir(PROJECT_A, SAMPLE_RECORD["sessionId"], tmpdir=tmp_path / "cc-tmp")
+
+
+@pytest.mark.parametrize("earlier_records", [3, 3000])
+def test_launch_cwd_of_a_resumed_session_skips_the_earlier_runs(
+    profiles: list[ClaudeProfile], tmp_path: Path, earlier_records: int
+) -> None:
+    # 3000 records make the transcript long enough to be bisected rather than read line by line.
+    personal = config_dir(profiles, "personal")
+    (personal / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_TMPDIR": str(tmp_path / "cc-tmp")}}))
+    write_record(personal, 4242, {**SAMPLE_RECORD, "pid": 4242, "cwd": PROJECT_B, "startedAt": STARTED_AT_MS})
+    earlier = [user(f"earlier prompt {n:04d}", minutes=-600 + n / 100, cwd=PROJECT_A) for n in range(earlier_records)]
+    write_transcript(
+        personal / "projects",
+        [*earlier, {"type": "last-prompt", "lastPrompt": "earlier"}, user("resumed", minutes=0.5, cwd=PROJECT_B)],
+        cwd=PROJECT_B,
+    )
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.launch_cwd == Path(PROJECT_B)
+    assert session.scratchpad_dir_inferred is False
+    assert session.scratchpad_dir == scratchpad_dir(PROJECT_B, SAMPLE_RECORD["sessionId"], tmpdir=tmp_path / "cc-tmp")
+
+
+@pytest.mark.parametrize("transcript", ["missing", "only-earlier-runs"])
+def test_scratchpad_falls_back_to_the_record_cwd(
+    profiles: list[ClaudeProfile], tmp_path: Path, transcript: str
+) -> None:
+    personal = config_dir(profiles, "personal")
+    (personal / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_TMPDIR": str(tmp_path / "cc-tmp")}}))
+    write_record(personal, 4242, {**SAMPLE_RECORD, "pid": 4242, "cwd": PROJECT_B, "startedAt": STARTED_AT_MS})
+    if transcript == "only-earlier-runs":
+        write_transcript(personal / "projects", [user("earlier", minutes=-600, cwd=PROJECT_A)], cwd=PROJECT_B)
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.launch_cwd is None
+    assert session.scratchpad_dir_inferred is True
+    assert session.scratchpad_dir == scratchpad_dir(PROJECT_B, SAMPLE_RECORD["sessionId"], tmpdir=tmp_path / "cc-tmp")
