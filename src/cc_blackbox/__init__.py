@@ -70,6 +70,8 @@ if TYPE_CHECKING:
     )
     from cc_blackbox.sessions import (
         ActiveSession,
+        CostState,
+        ModelUsage,
         ProfileAttribution,
         ProfileStart,
         SessionKind,
@@ -161,6 +163,7 @@ __all__ = [
     "Compatibility",
     "CompatibilityFeature",
     "ContentBlock",
+    "CostState",
     "Entry",
     "Failure",
     "FileOperation",
@@ -172,6 +175,7 @@ __all__ = [
     "MessagingError",
     "MessagingTarget",
     "MessagingUnavailable",
+    "ModelUsage",
     "Priority",
     "ProfileAttribution",
     "ProfileNotFound",
@@ -308,6 +312,8 @@ _EXPORTS: dict[str, str] = {
     "list_profiles": "cc_blackbox.profiles",
     "read_auth_switch_config": "cc_blackbox.profiles",
     "ActiveSession": "cc_blackbox.sessions",
+    "CostState": "cc_blackbox.sessions",
+    "ModelUsage": "cc_blackbox.sessions",
     "ProfileAttribution": "cc_blackbox.sessions",
     "ProfileStart": "cc_blackbox.sessions",
     "SessionKind": "cc_blackbox.sessions",

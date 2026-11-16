@@ -187,7 +187,7 @@ def test_headless_session_receives_a_message(workdir: Path) -> None:
         delivered = [p for p in prompts(entries) if marker in p.text]
         assert [p.origin for p in delivered] == ["peer"], f"the marker prompt is {delivered}"
         assert any(marker in t.text for t in assistant_texts(entries)), "no assistant text repeats the marker"
-        assert transcript.cwd == session.cwd and transcript.last_activity_at is not None
+        assert transcript.cwd == session.cwd and transcript.last_model_activity_at is not None
 
         def total(key: str) -> int:
             return sum(int((r.get("usage") or {}).get(key) or 0) for r in results)

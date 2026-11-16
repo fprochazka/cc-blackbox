@@ -9,6 +9,7 @@ from cc_blackbox.sessions.active import (
     find_session,
     list_active_sessions,
 )
+from cc_blackbox.sessions.cost_state import CostState, ModelUsage
 from cc_blackbox.sessions.profile_starts import ProfileStart
 from cc_blackbox.sessions.search import sessions_containing
 from cc_blackbox.sessions.stored import (
@@ -24,6 +25,8 @@ from cc_blackbox.sessions.stored import (
 
 __all__ = [
     "ActiveSession",
+    "CostState",
+    "ModelUsage",
     "ProfileAttribution",
     "ProfileStart",
     "SessionKind",

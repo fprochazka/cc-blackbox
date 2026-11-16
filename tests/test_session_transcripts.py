@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,8 +12,12 @@ from transcript_records import (
     OTHER_SESSION_ID,
     SESSION_ID,
     assistant,
+    attachment,
     bookkeeping,
     conversation,
+    envelope,
+    jsonl,
+    system,
     text,
     user,
     write_subagent,
@@ -58,7 +62,7 @@ def test_a_listing_reads_metadata_from_the_transcript(projects: Path) -> None:
     assert transcript.version == "2.1.319"
     assert transcript.entrypoint == "cli"
     assert transcript.started_at == datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
-    assert transcript.last_activity_at == datetime(2026, 11, 1, 9, 1, tzinfo=UTC)
+    assert transcript.last_record_at == datetime(2026, 11, 1, 9, 1, tzinfo=UTC)
     assert transcript.title == "Example walkthrough"
     assert transcript.title_source == "ai"
     assert transcript.first_prompt == "Explain the example module."
@@ -110,7 +114,7 @@ def test_the_newest_activity_comes_first_and_stubs_last(projects: Path) -> None:
     listed = list_session_transcripts()
 
     assert [t.session_id for t in listed] == [session_id(2), session_id(1), session_id(3)]
-    assert listed[2].last_activity_at is None
+    assert listed[2].last_record_at is None
 
 
 def test_cwd_within_keeps_the_repo_its_subdirs_and_worktrees(projects: Path) -> None:
@@ -357,3 +361,154 @@ def test_the_owner_of_a_transcript(home: Path, projects: Path) -> None:
 
     assert [t.session_id for t in list_session_transcripts(started_by=["work"])] == [session_id(2)]
     assert [t.session_id for t in list_session_transcripts(started_by=["lab"])] == [session_id(1)]
+
+
+def at(minutes: float) -> datetime:
+    return datetime(2026, 11, 1, 9, 0, tzinfo=UTC) + timedelta(minutes=minutes)
+
+
+def test_model_activity_ignores_records_written_without_the_model(projects: Path) -> None:
+    write_transcript(
+        projects,
+        [
+            *conversation(),
+            # An API error that Claude Code shows as a reply, with no response behind it.
+            assistant([text("API Error")], minutes=2, model="<synthetic>"),
+            system("local_command", minutes=3000, content="<command-name>/login</command-name>"),
+            user("The session was renamed.", minutes=3001, origin=None, isMeta=True),
+            attachment({"type": "date_change"}, minutes=3002),
+            envelope("pr-link", minutes=3003, prUrl="https://example.com/pr/1"),
+            bookkeeping("bridge-session"),
+        ],
+    )
+    (transcript,) = list_session_transcripts()
+
+    assert "last_model_activity_at" not in transcript.__dict__
+    assert transcript.last_model_activity_at == at(1)
+    assert transcript.last_record_at == at(3003)
+
+
+def test_model_activity_is_found_far_from_the_end_and_across_a_long_line(projects: Path) -> None:
+    filler = [bookkeeping("api-request-blob", blob="x" * 50_000) for _ in range(5)]
+    write_transcript(projects, [user("go", minutes=0), assistant([text("y" * 200_000)], minutes=5), *filler])
+    (transcript,) = list_session_transcripts()
+    assert transcript.last_model_activity_at == at(5)
+
+
+def test_model_activity_counts_subagents(projects: Path) -> None:
+    main = write_transcript(projects, conversation())
+    write_subagent(main, "a1b2c3d4e5f60718", [user("x", minutes=2), assistant([text("busy")], minutes=30)])
+    write_subagent(main, "b2c3d4e5f6071829", [user("y", minutes=2), assistant([text("done")], minutes=3)])
+    (transcript,) = list_session_transcripts()
+
+    assert transcript.last_model_activity_at == at(30)
+    assert [s.last_model_activity_at for s in transcript.subagents()] == [at(30), at(3)]
+
+
+def test_a_session_without_responses_has_no_model_activity(projects: Path) -> None:
+    write_transcript(projects, [user("hello", minutes=0)])
+    (transcript,) = list_session_transcripts()
+    assert transcript.last_model_activity_at is None
+    assert transcript.cost_state is None
+
+
+def test_the_newest_cost_state_is_parsed(projects: Path) -> None:
+    def cost(total: float) -> dict[str, object]:
+        return bookkeeping(
+            "cost-state",
+            totalCostUSD=total,
+            totalAPIDuration=61_500,
+            totalAPIDurationWithoutRetries=60_000,
+            totalToolDuration=2_000,
+            totalLinesAdded=12,
+            totalLinesRemoved=3,
+            totalDuration=3_600_000,
+            startTime=1_793_523_600_000,
+            modelUsage={
+                "claude-opus-5": {
+                    "inputTokens": 40,
+                    "outputTokens": 500,
+                    "thinkingTokens": 100,
+                    "cacheReadInputTokens": 9_000,
+                    "cacheCreationInputTokens": 800,
+                    "webSearchRequests": 0,
+                    "costUSD": total,
+                },
+                "broken": "not an object",
+            },
+            hasUnknownModelCost=False,
+        )
+
+    write_transcript(projects, [*conversation(), cost(0.5), bookkeeping("last-prompt"), cost(1.25)])
+    (transcript,) = list_session_transcripts()
+
+    state = transcript.cost_state
+    assert state is not None
+    assert (state.total_cost_usd, state.has_unknown_model_cost) == (1.25, False)
+    assert state.started_at == datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
+    assert (state.duration, state.api_duration, state.api_duration_without_retries, state.tool_duration) == (
+        timedelta(hours=1),
+        timedelta(seconds=61.5),
+        timedelta(minutes=1),
+        timedelta(seconds=2),
+    )
+    assert (state.lines_added, state.lines_removed) == (12, 3)
+    (model,) = state.model_usage.values()
+    assert list(state.model_usage) == ["claude-opus-5"]
+    assert (model.input_tokens, model.output_tokens, model.thinking_tokens) == (40, 500, 100)
+    assert (model.cache_read_input_tokens, model.cache_creation_input_tokens, model.web_search_requests) == (
+        9_000,
+        800,
+        0,
+    )
+    assert model.cost_usd == 1.25
+
+
+def test_the_name_and_the_last_location_come_from_the_end(projects: Path) -> None:
+    write_transcript(
+        projects,
+        [
+            *conversation(),
+            bookkeeping("custom-title", customTitle="first-name"),
+            bookkeeping("agent-name", agentName="first-name"),
+            user("moved", minutes=5, cwd="/home/user/projects/example/.worktrees/w1", gitBranch="w1"),
+            bookkeeping("custom-title", customTitle=" second-name "),
+            bookkeeping("mode", mode="normal"),
+        ],
+    )
+    (transcript,) = list_session_transcripts()
+
+    assert transcript.name == "second-name"
+    assert transcript.last_cwd == Path("/home/user/projects/example/.worktrees/w1")
+    assert transcript.cwd == Path(CWD)
+    assert transcript.last_git_branch == "w1"
+
+
+def test_a_transcript_keeps_what_it_read_first(projects: Path) -> None:
+    path = write_transcript(projects, conversation())
+    (transcript,) = list_session_transcripts()
+    assert transcript.last_model_activity_at == at(1)
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(jsonl([assistant([text("later")], minutes=9)]))
+
+    assert transcript.last_model_activity_at == at(1)
+    assert read_session_transcript(path).last_model_activity_at == at(9)
+
+
+def test_lazy_facts_are_found_in_json_with_spaces(projects: Path) -> None:
+    # Other tools, and json.dumps with its defaults, put a space after each colon; Claude Code does not.
+    path = projects / "-home-user-projects-example" / f"{SESSION_ID}.jsonl"
+    path.parent.mkdir(parents=True)
+    records = [
+        *conversation(),
+        bookkeeping("cost-state", totalCostUSD=0.75),
+        bookkeeping("agent-name", agentName="spaced"),
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    (transcript,) = list_session_transcripts()
+
+    assert transcript.last_model_activity_at == at(1)
+    assert transcript.cost_state is not None and transcript.cost_state.total_cost_usd == 0.75
+    assert transcript.name == "spaced"
+    assert transcript.last_cwd == Path(CWD)

@@ -7,6 +7,7 @@ import os
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cached_property
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -15,8 +16,10 @@ from cc_blackbox.errors import AuthSwitchConfigError, TranscriptNotFound
 from cc_blackbox.paths import project_slug, untruncated_slug
 from cc_blackbox.profiles import ClaudeProfile, list_profiles, profile_for_config_dir, resolve_profiles
 from cc_blackbox.sessions._launch import find_transcript_file, project_dirs
+from cc_blackbox.sessions._tail import last_record
 from cc_blackbox.sessions.active import ActiveSession, ProfileAttribution, list_active_sessions
 from cc_blackbox.sessions.claude_json import LastSessionIndex
+from cc_blackbox.sessions.cost_state import CostState, parse_cost_state
 from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, ProfileStart, read_profile_starts
 from cc_blackbox.transcripts.entries import Entry, ReadDiagnostics, parse_entry, parse_timestamp
 from cc_blackbox.transcripts.layout import (
@@ -73,9 +76,13 @@ _TITLE_KEYS: dict[str, tuple[str, TitleSource]] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
+# Without slots: functools.cached_property keeps its value in the instance __dict__, which slots remove.
+@dataclass(frozen=True)
 class SubagentTranscript:
-    """The transcript of one subagent, under ``<session id>/subagents/`` next to the main transcript."""
+    """The transcript of one subagent, under ``<session id>/subagents/`` next to the main transcript.
+
+    The ``cached_property`` attributes read the file on first access and keep the value; the object is a snapshot.
+    """
 
     session_id: str
     """The id of the main session. A subagent has no session id of its own; its records carry the parent's."""
@@ -104,13 +111,23 @@ class SubagentTranscript:
         """Stream the subagent's records; see :func:`~cc_blackbox.iter_entries`."""
         return iter_entries(self.path, types=types, start_offset=start_offset, diagnostics=diagnostics)
 
+    @cached_property
+    def last_model_activity_at(self) -> datetime | None:
+        """When the subagent last got a model response; see :attr:`SessionTranscript.last_model_activity_at`."""
+        return _last_response_at(self.path)
 
-@dataclass(frozen=True, slots=True)
+
+# Without slots, like SubagentTranscript.
+@dataclass(frozen=True)
 class SessionTranscript:
     """A session's main transcript, with what a listing needs read from its first and last records.
 
     An :class:`~cc_blackbox.ActiveSession` is a session that also has a live registry record. Every field except
     ``session_id``, ``path``, ``projects_dir``, ``size`` and ``modified_at`` is ``None`` when the transcript lacks it.
+
+    The fields come from the start and the end of the file, read once when the object is made. The ``cached_property``
+    attributes read more of the session on first access and keep the value, so the object stays a snapshot: read the
+    transcript again for current values.
     """
 
     session_id: str
@@ -125,8 +142,13 @@ class SessionTranscript:
     entrypoint: str | None
     """``cli`` for an interactive session; ``sdk-cli`` or ``sdk-ts`` for headless runs."""
     started_at: datetime | None
-    last_activity_at: datetime | None
-    """The newest record timestamp. ``None`` for a stub that has no timestamped record."""
+    last_record_at: datetime | None
+    """The newest record timestamp. ``None`` for a stub that has no timestamped record.
+
+    Records that involve no model also have one: local commands such as ``/login``, attachments, PR links, and the
+    notices Claude Code adds on a rename or a ``/cd``. They can land days after the last response, so this says when
+    the transcript was last written to, not when the session last used the model; see :attr:`last_model_activity_at`.
+    """
     title: str | None
     title_source: TitleSource | None
     first_prompt: str | None
@@ -143,6 +165,65 @@ class SessionTranscript:
     def sidecar_dir(self) -> Path:
         """``<slug>/<session id>/``, which holds subagent transcripts and tool results. It may not exist."""
         return self.path.with_suffix("")
+
+    @cached_property
+    def last_model_activity_at(self) -> datetime | None:
+        """When the session last got a model response, in its main transcript or in any of its subagents'.
+
+        It is the timestamp of the newest ``assistant`` record, which Claude Code writes for every response and only
+        for responses, leaving out the ones it makes up itself, such as an API error shown as a reply. A background
+        subagent writes only to its own transcript, so it can be busy long after the main transcript's last response.
+        ``None`` when nothing in the session got a response.
+
+        Reads the main transcript backwards from its end, then the subagent transcripts written to after the newest
+        response found so far, newest first. A transcript without a response is read whole.
+        """
+        newest = _last_response_at(self.path)
+        for path, mtime in _subagent_files_newest_first(self.sidecar_dir):
+            # A subagent transcript ends at its last record, so one older than the newest response has no newer one.
+            if newest is not None and mtime < newest.timestamp():
+                break
+            found = _last_response_at(path)
+            if found is not None and (newest is None or found > newest):
+                newest = found
+        return newest
+
+    @cached_property
+    def cost_state(self) -> CostState | None:
+        """The session's cost and token totals from its newest ``cost-state`` record, or ``None`` when it has none.
+
+        Claude Code writes the record only when a session process exits. For an ended session it holds the session's
+        totals. A running session has none until its first exit, and a resumed running session has the one from its
+        last exit, which leaves out the current run. Older Claude Code versions do not write the record at all.
+
+        Reads the main transcript backwards from its end, the whole file when it has no such record, which is the case
+        for every running session that was never resumed.
+        """
+        return last_record(self.path, (b'"cost-state"',), parse_cost_state)
+
+    @cached_property
+    def name(self) -> str | None:
+        """The session's newest name, from its ``agent-name`` or ``custom-title`` records, or ``None`` without one.
+
+        ``agent-name`` holds the name a running session has in its registry record; older Claude Code versions wrote
+        only ``custom-title``. Reads the main transcript backwards from its end, the whole file when it has neither.
+        """
+        return last_record(self.path, (b'"agent-name"', b'"custom-title"'), _name_of)
+
+    @cached_property
+    def last_cwd(self) -> Path | None:
+        """The ``cwd`` of the newest record that has one: where the session was when it last wrote a record.
+
+        Unlike :attr:`cwd`, it follows the session into a worktree or a ``/cd``. Reads the main transcript backwards
+        from its end.
+        """
+        value = last_record(self.path, (b'"cwd"',), lambda r: _nonempty(r.get("cwd")))
+        return Path(value) if value is not None else None
+
+    @cached_property
+    def last_git_branch(self) -> str | None:
+        """The ``gitBranch`` of the newest record that has one. Reads the main transcript backwards from its end."""
+        return last_record(self.path, (b'"gitBranch"',), lambda r: _nonempty(r.get("gitBranch")))
 
     def profile_starts(self) -> list[ProfileStart]:
         """Return the starts of the session that claude-code-auth-switch logged, oldest first. Reads the file on every
@@ -226,6 +307,46 @@ def _fallback_owner(
     if len(members) == 1 and any(c.config_dir == members[0].config_dir for c in candidates):
         return members[0], "dir"
     return None
+
+
+def _nonempty(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _name_of(record: dict[str, Any]) -> str | None:
+    key = {"agent-name": "agentName", "custom-title": "customTitle"}.get(record.get("type") or "")
+    value = record.get(key) if key else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _response_at(record: dict[str, Any]) -> datetime | None:
+    if record.get("type") != "assistant":
+        return None
+    message = record.get("message")
+    # Claude Code writes an API error or an interruption as an assistant record of this made-up model, with no usage.
+    if isinstance(message, dict) and message.get("model") == "<synthetic>":
+        return None
+    return parse_timestamp(record.get("timestamp"))
+
+
+def _last_response_at(path: Path) -> datetime | None:
+    return last_record(path, (b'"assistant"',), _response_at)
+
+
+def _subagent_files_newest_first(sidecar_dir: Path) -> list[tuple[Path, float]]:
+    found: list[tuple[Path, float]] = []
+    try:
+        entries = list(os.scandir(sidecar_dir / "subagents"))
+    except OSError:
+        return found
+    for entry in entries:
+        if entry.name.startswith("agent-") and entry.name.endswith(".jsonl"):
+            try:
+                found.append((Path(entry.path), entry.stat().st_mtime))
+            except OSError:
+                continue
+    found.sort(key=lambda item: item[1], reverse=True)
+    return found
 
 
 def _subagent(session_id: str, path: Path) -> SubagentTranscript:
@@ -319,7 +440,7 @@ def _summarize(path: Path, projects_dir: ProjectsDir) -> SessionTranscript:
         version=_first_str(records, "version"),
         entrypoint=_first_str(records, "entrypoint"),
         started_at=min(timestamps) if timestamps else None,
-        last_activity_at=max(timestamps) if timestamps else None,
+        last_record_at=max(timestamps) if timestamps else None,
         title=titles[source] if source is not None else None,
         title_source=source,
         first_prompt=_first_prompt(records),
@@ -347,10 +468,12 @@ def list_session_transcripts(
     active_since: datetime | None = None,
     started_by: Iterable[str | ClaudeProfile] | None = None,
 ) -> list[SessionTranscript]:
-    """List the main transcripts in the projects dirs of ``profiles``, newest activity first.
+    """List the main transcripts in the projects dirs of ``profiles``, by :attr:`~SessionTranscript.last_record_at`,
+    newest first.
 
     ``profiles`` and ``projects_dirs`` select the projects dirs as in :func:`~cc_blackbox.list_projects_dirs`. Stubs
-    without a timestamped record come last, by mtime.
+    without a timestamped record come last, by mtime. To order by when the sessions last used the model, sort the
+    result by :attr:`~SessionTranscript.last_model_activity_at`, which reads more of each session.
 
     ``cwd_within`` keeps sessions launched in one of the given dirs or below it. A dir reached through a symlink also
     matches under its resolved path, which is the one Claude Code records. Only project dirs whose name can be the slug
@@ -407,7 +530,7 @@ def list_session_transcripts(
                         continue
                 found.append(transcript)
 
-    found.sort(key=lambda t: (t.last_activity_at is not None, t.last_activity_at or t.modified_at), reverse=True)
+    found.sort(key=lambda t: (t.last_record_at is not None, t.last_record_at or t.modified_at), reverse=True)
     return found
 
 
