@@ -107,6 +107,55 @@ A session that runs under a profile you did not select is left out, even when it
 - `RateLimitedSender` stays below the receiver's rate limit and joins queued messages into one.
 - `rename_session()` asks a session to rename itself.
 
+### Event streams
+
+A watcher that runs as a background Bash task of a session can report its events in two ways: one JSON line per event on stdout, which the session reads from the task output, or a message into the session. The event stream module covers both, so that every such tool behaves the same way:
+
+```python
+import os
+import sys
+
+from cc_blackbox import (
+    EventEnvelope,
+    MessageEventSink,
+    MessagingUnavailable,
+    StdoutEventSink,
+    choose_event_stream,
+    current_session_or_none,
+)
+
+try:
+    choice = choose_event_stream("auto", current_session_or_none())
+except MessagingUnavailable as exc:  # only for "claude-message"
+    sys.exit(f"cannot message the session: {exc}")
+if choice.fallback:
+    print(f"ci-watch: not messaging the session: {choice.fallback}", file=sys.stderr)
+
+if choice.mode == "claude-message":
+    assert choice.session is not None
+    sink = MessageEventSink(
+        choice.session,
+        EventEnvelope("ci-watcher", {"pipeline": "1234"}, record="/tmp/ci-1234/events.jsonl"),
+        sender=f"ci-watch:{os.getpid()}",
+        sender_name="ci-watch pipeline 1234",
+        status=lambda line: print(f"ci-watch: {line}", file=sys.stderr),
+        flush_on={"watch_ended"},
+    )
+else:
+    sink = StdoutEventSink()
+```
+
+An event is any object with `kind`, `seq` and `to_json()`, see the `StreamEvent` protocol. The tool calls `sink.emit(events)` for new events, `sink.tick()` whenever `sink.seconds_until_flush()` comes due, ends when `sink.alive()` turns `False`, and calls `sink.close()` at the end.
+
+- **Choice.** `auto` picks `claude-message` when the process runs under a session that can receive messages, see `messaging_problem()`, and stdout otherwise. Under a session, `choice.fallback` says why it did not message it, for example because the session speaks a peer protocol this version does not know. `claude-message` raises `MessagingUnavailable` with that reason instead of falling back.
+- **Batching.** Events that arrive close together go out as one message: the first event of a burst waits 3 s (`burst_wait`) for the rest. An event whose kind is in `flush_on` sends the batch at once.
+- **Envelope.** Each message is `<tag attributes seq="first-last">`, one JSON line per event, and the closing tag, because the receiving model sees the content but not the sender name. `seq` keeps every body unique, so the receiver's duplicate check never drops a real event. `payload` sets what each line holds; it is `event.to_json()` by default.
+- **Announcement.** The first batch that holds an event of kind `announce_on`, or the first batch at all when it is `None`, also carries `announce_attributes`, and its events pass through `announced`. Use it for long values that the receiver needs only once, such as paths.
+- **Size cap.** A batch above 64 KB (`max_bytes`) is sent as a count per kind, with `"read": record` when the envelope names a `record`.
+- **Rate limits.** The sink sends through a `RateLimitedSender` with `sender` as the rate-limit key and `sender_name` as the name the receiver shows. `close()` waits up to 10 s for messages that the limit held back.
+- **Lifetime.** `alive()` turns `False` when the socket refuses a message, or when the session this process runs under can no longer receive messages, checked every 30 s.
+- **Runtime fallback.** When a send raises `UnsupportedProtocol` or `MessagingUnavailable`, for example after a Claude Code update, the sink reports `stream fallback: cannot message the session (…); events now go to stdout` through `status` and sends this batch and every later one to stdout, or to the `fallback` sink. Other send errors are reported through `status` and the batch is dropped, so keep a full record of the events elsewhere.
+
 ### Transcripts
 
 Claude Code writes every session to `<config dir>/projects/<slug>/<session id>.jsonl`, where `<slug>` is the launch directory with every non-alphanumeric character replaced by `-`. Subagent transcripts and large tool results sit under `<slug>/<session id>/`. `list_session_transcripts()` lists the sessions of every profile, reading only the start and the end of each file:
