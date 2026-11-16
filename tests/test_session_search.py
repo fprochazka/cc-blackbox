@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transcript_records import assistant, tool_use, user, write_subagent, write_tool_result_file, write_transcript
+from records import write_profile_start
+from transcript_records import CWD, assistant, tool_use, user, write_subagent, write_tool_result_file, write_transcript
 
 from cc_blackbox import SessionTranscript, list_session_transcripts, sessions_containing
 
@@ -62,3 +63,11 @@ def test_workers_give_the_same_result_in_the_same_order(tmp_path: Path) -> None:
 def test_results_keep_the_given_order(tmp_path: Path) -> None:
     sessions = list(reversed(make(tmp_path)))
     assert sessions_containing(sessions, ["parser", "readme"], match_any=True) == [sessions[1], sessions[2]]
+
+
+def test_the_auth_switch_start_log_is_not_searched(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    write_transcript(projects, [user("Fix the parser.")], session_id=session_id(1))
+    write_profile_start(projects, session_id(1), CWD, ts=1, profile="unusual-profile-name")
+    [session] = list_session_transcripts(projects_dirs=[projects])
+    assert sessions_containing([session], ["unusual-profile-name"]) == []

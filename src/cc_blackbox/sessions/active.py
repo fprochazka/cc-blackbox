@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -15,16 +16,24 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 from cc_blackbox.compatibility import Compatibility, check_compatibility
-from cc_blackbox.errors import AmbiguousSession, SessionNotFound
+from cc_blackbox.errors import AmbiguousSession, AuthSwitchConfigError, SessionNotFound
 from cc_blackbox.paths import node_tmpdir, scratchpad_dir
-from cc_blackbox.profiles import ClaudeProfile, current_profile, resolve_profiles
+from cc_blackbox.profiles import (
+    ClaudeProfile,
+    current_profile,
+    list_profiles,
+    profile_for_config_dir,
+    resolve_profiles,
+)
 from cc_blackbox.sessions._launch import find_transcript_file, read_launch_cwd
 from cc_blackbox.sessions.liveness import is_session_process_alive
+from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, read_profile_starts, start_of_process
 from cc_blackbox.sessions.registry import RecordFile, read_records
-from cc_blackbox.transcripts.layout import list_projects_dirs
+from cc_blackbox.transcripts.layout import ProjectsDir, is_session_id, list_projects_dirs, project_dirs_for
 
 __all__ = [
     "ActiveSession",
+    "ProfileAttribution",
     "SessionKind",
     "SessionStatus",
     "current_session",
@@ -38,16 +47,27 @@ SessionStatus = Literal["busy", "shell", "idle", "waiting"]
 SessionKind = Literal["interactive", "bg", "daemon", "daemon-worker"]
 """The kinds Claude Code 2.1 writes. :attr:`ActiveSession.kind` keeps any other string as it is."""
 
+ProfileAttribution = Literal["log", "environ", "dir", "inferred"]
+"""How :attr:`ActiveSession.profile` was decided.
+
+``log`` is the claude-code-auth-switch start log next to the transcript, see :class:`~cc_blackbox.ProfileStart`.
+``environ`` is the ``CLAUDE_CONFIG_DIR`` of the session process, which the SDK can read only on Linux, or of this
+process for :func:`current_session`. ``dir`` means only one profile uses the sessions dir that holds the record.
+``inferred`` is a guess: several profiles share that sessions dir and nothing else said which of them runs the session.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class ActiveSession:
     """A Claude Code session whose registry record exists, and whose process runs if liveness was checked.
 
-    Every field except ``profile``, ``pid`` and ``record_path`` is ``None`` when the record lacks it or holds a value of
-    an unexpected type. ``raw`` keeps the whole record for fields the SDK does not model.
+    Every field except ``profile``, ``pid``, ``record_path`` and ``profile_source`` is ``None`` when the record lacks it
+    or holds a value of an unexpected type. ``raw`` keeps the whole record for fields the SDK does not model.
     """
 
     profile: ClaudeProfile
+    """The profile the session runs under. When several profiles share a sessions dir, see
+    :attr:`profile_source` for how sure that is."""
     pid: int
     session_id: str | None
     name: str | None
@@ -93,6 +113,12 @@ class ActiveSession:
     guess. :attr:`cwd` is right unless the session changed directory before writing its first transcript record."""
     record_path: Path
     raw: Mapping[str, Any]
+    profile_source: ProfileAttribution = "dir"
+
+    @property
+    def profile_inferred(self) -> bool:
+        """``True`` when :attr:`profile` is a guess among the profiles that share the session's sessions dir."""
+        return self.profile_source == "inferred"
 
     @property
     def address(self) -> str:
@@ -178,13 +204,49 @@ def _settings_tmpdir(profile: ClaudeProfile, cwd: Path) -> str | None:
     return None
 
 
-def _launch_cwd(profile: ClaudeProfile, record: RecordFile, cwd: Path | None, session_id: str | None) -> Path | None:
-    started_at = record.data.get("startedAt")
-    if session_id is None or isinstance(started_at, bool) or not isinstance(started_at, int | float) or started_at <= 0:
-        return None
+def _started_at_ms(record: RecordFile) -> float | None:
+    value = record.data.get("startedAt")
+    return value if not isinstance(value, bool) and isinstance(value, int | float) and value > 0 else None
+
+
+def _locate(
+    session_id: str | None, cwd: Path | None, searched: Sequence[ProjectsDir]
+) -> tuple[Path | None, Path | None]:
+    """Return the session's transcript and its auth-switch start log, each ``None`` when missing."""
+    if session_id is None or not is_session_id(session_id):
+        return None, None
     # The transcript follows /cd, so the record's cwd names its project dir.
-    found = find_transcript_file(session_id, list_projects_dirs([profile]), cwd)
-    return read_launch_cwd(found[0], started_at) if found is not None else None
+    found = find_transcript_file(session_id, searched, cwd)
+    if found is not None:
+        return found[0], found[0].with_suffix("") / PROFILE_STARTS_FILE
+    # A session that has not written its transcript yet can already have the log, which its SessionStart hook writes.
+    if cwd is not None and searched:
+        for project in project_dirs_for(cwd, projects_dirs=[d.path for d in searched]):
+            log = project / session_id / PROFILE_STARTS_FILE
+            if log.is_file():
+                return None, log
+    return None, None
+
+
+def _owner(
+    members: Sequence[ClaudeProfile], record: RecordFile, log: Path | None, env: Mapping[str, str] | None
+) -> tuple[ClaudeProfile, ProfileAttribution]:
+    """Return the profile among ``members``, the profiles that share the record's sessions dir, that runs it.
+
+    A session writes its record only into its own config dir's sessions dir, so an owner outside ``members`` is a
+    stale log line or another process and is ignored.
+    """
+    if log is not None:
+        start = start_of_process(read_profile_starts(log), record.pid, _started_at_ms(record))
+        if start is not None:
+            owner = profile_for_config_dir(start.config_dir, start.profile, members)
+            if owner is not None:
+                return owner, "log"
+    if env is not None:
+        owner = profile_for_config_dir(env.get("CLAUDE_CONFIG_DIR"), env.get("FP_CC_AUTH_SWITCH_PROFILE"), members)
+        if owner is not None:
+            return owner, "environ"
+    return members[0], "dir" if len(members) == 1 else "inferred"
 
 
 def _scratchpad(
@@ -193,6 +255,7 @@ def _scratchpad(
     launch_cwd: Path | None,
     cwd: Path | None,
     session_id: str | None,
+    env: Mapping[str, str] | None,
     *,
     own_env: bool,
 ) -> tuple[Path | None, bool]:
@@ -201,7 +264,6 @@ def _scratchpad(
         return None, False
     if own_env:
         return scratchpad_dir(base, session_id), launch_cwd is None
-    env = _read_process_environ(record.pid)
     # Claude Code reads the project settings of the dir it starts in, so their env applies to the launch dir.
     tmpdir = _settings_tmpdir(profile, base)
     if tmpdir is None and env is not None:
@@ -209,7 +271,16 @@ def _scratchpad(
     return scratchpad_dir(base, session_id, tmpdir=tmpdir, uid=record.owner_uid), tmpdir is None or launch_cwd is None
 
 
-def _to_session(profile: ClaudeProfile, record: RecordFile, *, own_env: bool = False) -> ActiveSession:
+def _to_session(
+    members: Sequence[ClaudeProfile],
+    record: RecordFile,
+    searched: Sequence[ProjectsDir],
+    env: Mapping[str, str] | None,
+    *,
+    own_profile: ClaudeProfile | None = None,
+) -> ActiveSession:
+    """Build the session of ``record``. ``own_profile`` is set for this process's own session, whose environment and
+    profile are known."""
     data = record.data
     cwd_value = _str(data, "cwd")
     cwd = Path(cwd_value) if cwd_value and cwd_value != "?" else None
@@ -217,8 +288,16 @@ def _to_session(profile: ClaudeProfile, record: RecordFile, *, own_env: bool = F
     socket_value = _str(data, "messagingSocketPath")
     features = data.get("peerFeatures")
     peer_features = frozenset(f for f in features if isinstance(f, str)) if isinstance(features, list) else frozenset()
-    launch_cwd = _launch_cwd(profile, record, cwd, session_id)
-    scratchpad, inferred = _scratchpad(profile, record, launch_cwd, cwd, session_id, own_env=own_env)
+    transcript, log = _locate(session_id, cwd, searched)
+    started_at_ms = _started_at_ms(record)
+    launch_cwd = read_launch_cwd(transcript, started_at_ms) if transcript and started_at_ms is not None else None
+    attribution: tuple[ClaudeProfile, ProfileAttribution] = (
+        _owner(members, record, log, env) if own_profile is None else (own_profile, "environ")
+    )
+    profile, profile_source = attribution
+    scratchpad, inferred = _scratchpad(
+        profile, record, launch_cwd, cwd, session_id, env, own_env=own_profile is not None
+    )
     return ActiveSession(
         profile=profile,
         pid=record.pid,
@@ -242,12 +321,33 @@ def _to_session(profile: ClaudeProfile, record: RecordFile, *, own_env: bool = F
         scratchpad_dir_inferred=inferred,
         record_path=record.path,
         raw=MappingProxyType(data),
+        profile_source=profile_source,
     )
 
 
 def _is_alive(record: RecordFile) -> bool:
     data = record.data
     return is_session_process_alive(record.pid, _str(data, "procStart"), _str(data, "pidDomain"))
+
+
+def _sessions_dir_groups(selected: Sequence[ClaudeProfile], everyone: bool) -> list[list[ClaudeProfile]]:
+    """Group the profiles by the realpath of their sessions dir, keeping only groups with a selected member.
+
+    The groups span every known profile, not only the selected ones: a record in a shared dir may belong to a profile
+    that was not selected, and must not be reported as a selected one's. Selected profiles come first in each group.
+    """
+    known = list(selected)
+    if not everyone:
+        with contextlib.suppress(AuthSwitchConfigError):
+            known.extend(list_profiles())
+    groups: dict[Path, list[ClaudeProfile]] = {}
+    seen: set[Path] = set()
+    for profile in known:
+        if profile.config_dir not in seen:
+            seen.add(profile.config_dir)
+            groups.setdefault(Path(os.path.realpath(profile.sessions_dir)), []).append(profile)
+    wanted = {p.config_dir for p in selected}
+    return [members for members in groups.values() if members[0].config_dir in wanted]
 
 
 def list_active_sessions(
@@ -262,6 +362,10 @@ def list_active_sessions(
     SDK never deletes such records; sweeping them is Claude Code's job. The result is ordered by profile, in the order
     given, then by start time.
 
+    Profiles can share one sessions dir. Each dir is read once, so each session is listed once, under the profile that
+    runs it; :attr:`~ActiveSession.profile_source` says how that profile was found. A session of a profile that was
+    not selected is left out even when its record sits in a selected profile's dir.
+
     Each session's transcript is opened to find its :attr:`~ActiveSession.launch_cwd`, which takes a read of its start,
     or a few reads spread over it for a resumed session.
 
@@ -269,13 +373,23 @@ def list_active_sessions(
         ProfileNotFound: a string entry names no known profile.
     """
     selected = resolve_profiles(profiles)
+    order: dict[Path, int] = {}
+    for index, profile in enumerate(selected):
+        order.setdefault(profile.config_dir, index)
     oldest = datetime.min.replace(tzinfo=UTC)
     result: list[tuple[int, ActiveSession]] = []
-    for index, profile in enumerate(selected):
-        for record in read_records(profile.sessions_dir):
-            if check_liveness and not _is_alive(record):
+    for members in _sessions_dir_groups(selected, profiles is None):
+        searched = list_projects_dirs(members)
+        for record in read_records(members[0].sessions_dir):
+            alive = _is_alive(record)
+            if check_liveness and not alive:
                 continue
-            result.append((index, _to_session(profile, record)))
+            # The environment of a reused pid belongs to another process.
+            env = _read_process_environ(record.pid) if alive else None
+            session = _to_session(members, record, searched, env)
+            position = order.get(session.profile.config_dir)
+            if position is not None:
+                result.append((position, session))
     result.sort(key=lambda item: (item[0], item[1].started_at or oldest, item[1].pid))
     return [session for _, session in result]
 
@@ -373,4 +487,4 @@ def current_session() -> ActiveSession | None:
     record = pick()
     if record is None:
         return None
-    return _to_session(profile, record, own_env=True)
+    return _to_session([profile], record, list_projects_dirs([profile]), None, own_profile=profile)

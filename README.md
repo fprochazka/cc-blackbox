@@ -86,6 +86,15 @@ Each profile has a name that is unique in the result and stable across runs. A d
 
 `cwd` is the session's current directory from its registry record, which changes when the session enters a worktree or runs `/cd`. `launch_cwd` is the directory the session's process started in. Claude Code does not record it in the registry, so it is read from the first transcript record that process wrote; for a resumed session that takes a few reads spread over the transcript.
 
+**Shared sessions dirs.** Several profiles can share one `sessions/` dir, for example when [claude-code-auth-switch](https://github.com/fprochazka/claude-code-auth-switch) symlinks it to `~/.claude/sessions` so that their sessions can list and message each other. A record does not say which profile wrote it. `list_active_sessions()` reads each real dir once, lists every session once, and sets `session.profile` to the profile that runs it. `session.profile_source` says how that profile was found:
+
+- `log`: the start log that auth-switch's SessionStart hook keeps next to the transcript, matched by pid and start time;
+- `environ`: `CLAUDE_CONFIG_DIR` in the session process's environment, which the library can read only on Linux and only while the process runs;
+- `dir`: only one profile uses the dir;
+- `inferred`: a guess, the first selected profile that shares the dir. `session.profile_inferred` is `True`.
+
+A session that runs under a profile you did not select is left out, even when its record sits in a selected profile's dir.
+
 `scratchpad_dir` is the session's scratchpad directory, which Claude Code derives from the launch directory and keeps after `/cd`. Claude Code creates it on first use, so it may not exist yet. When the session has written no transcript record yet, `launch_cwd` is `None`, the scratchpad is derived from `cwd`, and `scratchpad_dir_inferred` is `True`.
 
 ### Messages
@@ -117,6 +126,7 @@ for session in sessions_containing(sessions, ["flaky test"]):
 ```
 
 - **Profiles share transcripts.** Profiles often symlink `projects/` to one directory, so a listing covers each distinct projects dir once and `session.projects_dir.profiles` names every profile that uses it. A transcript does not record which of them wrote it.
+- **Who ran a session.** claude-code-auth-switch can log every start of a session to `<slug>/<session id>/auth-switch-profile-starts.jsonl`. `session.profile_starts()` returns those starts, each with its pid, profile and config dir. A resumed session has one per run, and the runs can belong to different profiles. `list_session_transcripts(started_by=["work"])` keeps the sessions that a profile started or resumed. A session without the log is left out of that filter.
 - **Which files are sessions.** Only a file named by a session id, which is a UUID, is a session. Other tools put their own `.jsonl` files next to transcripts, and `session_id_for_path()` maps any file under a projects dir to the session that owns it, or to `None`.
 - **`cwd_within`.** It keeps the sessions launched in a dir or below it, and it reads only the project dirs whose name can belong to such a session. A session stored under a project dir of another name, for example one resumed from elsewhere, is found only by a listing without `cwd_within`.
 - **Symlinked dirs.** Claude Code names the project dir after the launch dir with symlinks resolved, and records that path as `cwd`. `cwd_within` matches a dir under the spelling you pass and under its resolved path. `project_dirs_for(cwd)` returns the project dirs of one dir, the resolved spelling first.

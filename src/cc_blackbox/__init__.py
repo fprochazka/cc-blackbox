@@ -59,6 +59,8 @@ if TYPE_CHECKING:
     )
     from cc_blackbox.sessions import (
         ActiveSession,
+        ProfileAttribution,
+        ProfileStart,
         SessionKind,
         SessionStatus,
         SessionTranscript,
@@ -154,8 +156,10 @@ __all__ = [
     "MessagingTarget",
     "MessagingUnavailable",
     "Priority",
+    "ProfileAttribution",
     "ProfileNotFound",
     "ProfileSource",
+    "ProfileStart",
     "ProjectsDir",
     "Prompt",
     "PromptOrigin",
@@ -271,6 +275,8 @@ _EXPORTS: dict[str, str] = {
     "list_profiles": "cc_blackbox.profiles",
     "read_auth_switch_config": "cc_blackbox.profiles",
     "ActiveSession": "cc_blackbox.sessions",
+    "ProfileAttribution": "cc_blackbox.sessions",
+    "ProfileStart": "cc_blackbox.sessions",
     "SessionKind": "cc_blackbox.sessions",
     "SessionStatus": "cc_blackbox.sessions",
     "SessionTranscript": "cc_blackbox.sessions",

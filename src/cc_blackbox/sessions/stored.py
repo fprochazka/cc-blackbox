@@ -13,9 +13,10 @@ from typing import Any, Literal
 
 from cc_blackbox.errors import AuthSwitchConfigError, TranscriptNotFound
 from cc_blackbox.paths import project_slug, untruncated_slug
-from cc_blackbox.profiles import ClaudeProfile
+from cc_blackbox.profiles import ClaudeProfile, profile_for_config_dir, resolve_profiles
 from cc_blackbox.sessions._launch import find_transcript_file, project_dirs
 from cc_blackbox.sessions.active import ActiveSession, list_active_sessions
+from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, ProfileStart, read_profile_starts
 from cc_blackbox.transcripts.entries import Entry, ReadDiagnostics, parse_entry, parse_timestamp
 from cc_blackbox.transcripts.layout import (
     ProjectsDir,
@@ -141,6 +142,16 @@ class SessionTranscript:
     def sidecar_dir(self) -> Path:
         """``<slug>/<session id>/``, which holds subagent transcripts and tool results. It may not exist."""
         return self.path.with_suffix("")
+
+    def profile_starts(self) -> list[ProfileStart]:
+        """Return the starts of the session that claude-code-auth-switch logged, oldest first. Reads the file on every
+        call.
+
+        Each run of the session, the first one and every resume, ``/clear`` or compaction, adds one, with the profile
+        it ran under. A resumed session can therefore list several profiles. The list is empty for a session that was
+        not started through an auth-switch wrapper with the start hook installed.
+        """
+        return read_profile_starts(self.sidecar_dir / PROFILE_STARTS_FILE)
 
     def entries(
         self,
@@ -295,6 +306,7 @@ def list_session_transcripts(
     projects_dirs: Iterable[str | os.PathLike[str]] | None = None,
     cwd_within: Iterable[str | os.PathLike[str]] | None = None,
     active_since: datetime | None = None,
+    started_by: Iterable[str | ClaudeProfile] | None = None,
 ) -> list[SessionTranscript]:
     """List the main transcripts in the projects dirs of ``profiles``, newest activity first.
 
@@ -310,13 +322,17 @@ def list_session_transcripts(
 
     ``active_since`` skips transcripts not written to since then. Transcripts are append-only, so the mtime is enough.
 
+    ``started_by`` keeps sessions that at least one of these profiles started or resumed, according to
+    :meth:`SessionTranscript.profile_starts`. A session without that log is left out, because nothing says who ran it.
+
     Raises:
-        ProfileNotFound: a string entry of ``profiles`` names no known profile.
+        ProfileNotFound: a string entry of ``profiles`` or ``started_by`` names no known profile.
     """
     within = list(dict.fromkeys(s for p in cwd_within for s in cwd_spellings(p))) if cwd_within is not None else None
     slugs = [untruncated_slug(p) for p in within] if within is not None else None
     exact = {project_slug(p) for p in within} if within is not None else set()
     since = active_since.timestamp() if active_since is not None else None
+    starters = resolve_profiles(started_by) if started_by is not None else None
 
     found: list[SessionTranscript] = []
     for projects_dir in list_projects_dirs(profiles, paths=projects_dirs):
@@ -340,6 +356,11 @@ def list_session_transcripts(
                             continue
                     elif not any(_abspath(transcript.cwd).is_relative_to(p) for p in within):
                         continue
+                if starters is not None and not any(
+                    profile_for_config_dir(start.config_dir, start.profile, starters) is not None
+                    for start in transcript.profile_starts()
+                ):
+                    continue
                 found.append(transcript)
 
     found.sort(key=lambda t: (t.last_activity_at is not None, t.last_activity_at or t.modified_at), reverse=True)

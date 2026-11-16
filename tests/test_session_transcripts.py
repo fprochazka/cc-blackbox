@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from records import live_record, make_profile_dir, write_record
+from records import live_record, make_profile_dir, write_profile_start, write_record
 from transcript_records import (
     CWD,
     OTHER_SESSION_ID,
@@ -289,3 +289,33 @@ def test_an_assistant_reply_does_not_count_as_a_first_prompt(projects: Path) -> 
     )
     (transcript,) = list_session_transcripts()
     assert transcript.first_prompt is None
+
+
+def test_profile_starts_and_started_by(home: Path, projects: Path) -> None:
+    (home / ".claude" / "auth-switch.yaml").write_text("profiles:\n  work: {}\n  lab: {}\n", encoding="utf-8")
+    for name in ("work", "lab"):
+        make_profile_dir(home / ".claude-profiles" / name)
+        (home / ".claude-profiles" / name / "projects").symlink_to(projects)
+    work_dir = str(home / ".claude-profiles" / "work")
+    write_transcript(projects, conversation(), session_id=session_id(1))
+    write_profile_start(projects, session_id(1), CWD, ts=1_794_100_000_000, pid=10, profile="work", config_dir=work_dir)
+    log = write_profile_start(projects, session_id(1), CWD, ts=1_794_100_900_000, pid=11, source="resume")
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write('{"v": 2, "ts": 1}\nnot json\n{"v": 1, "pid": 12}\n{"v": 1, "ts": 1794100000')
+    write_transcript(projects, conversation(), session_id=session_id(2))
+
+    transcript = find_session_transcript(session_id(1))
+    first, second = transcript.profile_starts()
+
+    assert (first.pid, first.source, first.profile, first.config_dir) == (10, "startup", "work", Path(work_dir))
+    assert first.started_at == datetime.fromtimestamp(1_794_100_000, tz=UTC)
+    owner = first.find_profile()
+    assert owner is not None and owner.name == "work"
+    assert (second.pid, second.source, second.profile, second.config_dir) == (11, "resume", None, None)
+    owner = second.find_profile()
+    assert owner is not None and owner.name == "default"
+    assert find_session_transcript(session_id(2)).profile_starts() == []
+
+    assert [t.session_id for t in list_session_transcripts(started_by=["work"])] == [session_id(1)]
+    assert [t.session_id for t in list_session_transcripts(started_by=["default"])] == [session_id(1)]
+    assert list_session_transcripts(started_by=["lab"]) == []

@@ -68,7 +68,12 @@ class ClaudeProfile:
 
     @property
     def sessions_dir(self) -> Path:
-        """The dir that holds the ``<pid>.json`` records of the profile's running sessions."""
+        """The dir that holds the ``<pid>.json`` records of the profile's running sessions.
+
+        Several profiles can share one, for example when claude-code-auth-switch symlinks it to ``~/.claude/sessions``
+        so that their sessions can list and message each other. A record names no profile, so
+        :func:`~cc_blackbox.list_active_sessions` reads a shared dir once and works out the owner of each record.
+        """
         return self.config_dir / "sessions"
 
     @property
@@ -303,10 +308,25 @@ def current_profile(*, profiles: Sequence[ClaudeProfile] | None = None) -> Claud
     """
     candidates = list_profiles() if profiles is None else profiles
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-    if not env_dir:
-        hint = os.environ.get("FP_CC_AUTH_SWITCH_PROFILE")
-        for profile in candidates:
-            if hint and profile.auth_switch_name == hint:
-                return profile
-    target = _realpath(env_dir) if env_dir else _realpath(default_config_dir())
-    return next((p for p in candidates if p.config_dir == target), None)
+    hint = os.environ.get("FP_CC_AUTH_SWITCH_PROFILE") if not env_dir else None
+    return profile_for_config_dir(env_dir, hint, candidates)
+
+
+def profile_for_config_dir(
+    config_dir: str | os.PathLike[str] | None, auth_switch_name: str | None, profiles: Sequence[ClaudeProfile]
+) -> ClaudeProfile | None:
+    """Return the profile of ``profiles`` that a process with these two environment values runs under, or ``None``.
+
+    ``config_dir`` is ``CLAUDE_CONFIG_DIR`` and ``auth_switch_name`` is ``FP_CC_AUTH_SWITCH_PROFILE``. Without a
+    ``config_dir`` the auth-switch name is tried first, then ``~/.claude``. With one, the profile with that realpath
+    wins, and the auth-switch name is the fallback for a dir that no profile uses.
+    """
+    if not config_dir and auth_switch_name:
+        named = next((p for p in profiles if p.auth_switch_name == auth_switch_name), None)
+        if named is not None:
+            return named
+    target = _realpath(config_dir) if config_dir else _realpath(default_config_dir())
+    found = next((p for p in profiles if p.config_dir == target), None)
+    if found is None and config_dir and auth_switch_name:
+        found = next((p for p in profiles if p.auth_switch_name == auth_switch_name), None)
+    return found

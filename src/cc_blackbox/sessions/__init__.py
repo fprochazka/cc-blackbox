@@ -2,12 +2,14 @@
 
 from cc_blackbox.sessions.active import (
     ActiveSession,
+    ProfileAttribution,
     SessionKind,
     SessionStatus,
     current_session,
     find_session,
     list_active_sessions,
 )
+from cc_blackbox.sessions.profile_starts import ProfileStart
 from cc_blackbox.sessions.search import sessions_containing
 from cc_blackbox.sessions.stored import (
     SessionTranscript,
@@ -22,6 +24,8 @@ from cc_blackbox.sessions.stored import (
 
 __all__ = [
     "ActiveSession",
+    "ProfileAttribution",
+    "ProfileStart",
     "SessionKind",
     "SessionStatus",
     "SessionTranscript",

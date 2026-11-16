@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from cc_blackbox.paths import project_slug
 from cc_blackbox.sessions.liveness import own_pid_domain
 
 SAMPLE_RECORD: dict[str, Any] = {
@@ -78,3 +79,26 @@ def make_profile_dir(path: Path) -> Path:
 
 def own_pid() -> int:
     return os.getpid()
+
+
+def write_profile_start(projects_dir: Path, session_id: str, cwd: str, **line: Any) -> Path:
+    """Append one line to the start log that the claude-code-auth-switch SessionStart hook writes next to a transcript.
+
+    ``line`` overrides the defaults of the hook's format, version 1.
+    """
+    path = projects_dir / project_slug(cwd) / session_id / "auth-switch-profile-starts.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "v": 1,
+        "ts": 0,
+        "session_id": session_id,
+        "pid": None,
+        "source": "startup",
+        "profile": None,
+        "config_dir": None,
+        "cwd": cwd,
+        **line,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry) + "\n")
+    return path

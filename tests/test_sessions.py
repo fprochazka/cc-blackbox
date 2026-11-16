@@ -6,9 +6,10 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
-from records import SAMPLE_RECORD, dead_pid, live_record, make_profile_dir, write_record
+from records import SAMPLE_RECORD, dead_pid, live_record, make_profile_dir, write_profile_start, write_record
 from transcript_records import BASE_TIME, CWD, envelope, user, write_transcript
 
 from cc_blackbox import (
@@ -393,3 +394,204 @@ def test_scratchpad_falls_back_to_the_record_cwd(
     assert session.launch_cwd is None
     assert session.scratchpad_dir_inferred is True
     assert session.scratchpad_dir == scratchpad_dir(PROJECT_B, SAMPLE_RECORD["sessionId"], tmpdir=tmp_path / "cc-tmp")
+
+
+# Sessions dirs shared between profiles, as claude-code-auth-switch sets up with share_sessions: each profile's
+# sessions/ is a symlink to ~/.claude/sessions, and projects/ is shared the same way.
+
+LAYOUTS = ["real", "symlinked", "mixed"]
+SHARING = {"real": (), "symlinked": ("personal", "work", "other"), "mixed": ("personal", "work")}
+
+
+def session_uuid(n: int) -> str:
+    return f"00000000-0000-4000-8000-{n:012d}"
+
+
+@pytest.fixture
+def layout_home(home: Path, request: pytest.FixtureRequest) -> Path:
+    """``~/.claude`` and the auth-switch profiles personal, work and other, with sessions dirs per ``request.param``."""
+    sharing = SHARING[request.param]
+    (home / ".claude" / "sessions").mkdir(parents=True)
+    (home / ".claude" / "projects").mkdir()
+    (home / ".claude" / "auth-switch.yaml").write_text(
+        "profiles:\n  personal: {}\n  work: {}\n  other: {}\n", encoding="utf-8"
+    )
+    for name in ("personal", "work", "other"):
+        profile = home / ".claude-profiles" / name
+        profile.mkdir(parents=True)
+        (profile / "settings.json").write_text("{}", encoding="utf-8")
+        (profile / "projects").symlink_to(home / ".claude" / "projects")
+        if name in sharing:
+            (profile / "sessions").symlink_to(home / ".claude" / "sessions")
+        else:
+            (profile / "sessions").mkdir()
+    return home
+
+
+def start_session(
+    home: Path, owner: str, pid: int, n: int, *, log: bool = True, record: dict[str, Any] | None = None
+) -> str:
+    """Write the record of a session run by ``owner`` into its sessions dir, and its start log line if ``log``."""
+    config = home / ".claude" if owner == "default" else home / ".claude-profiles" / owner
+    sid = session_uuid(n)
+    fields = {"pid": pid, "sessionId": sid, "name": f"{owner}-session", "startedAt": STARTED_AT_MS}
+    write_record(config, pid, {**SAMPLE_RECORD, **(record or {}), **fields})
+    if log:
+        write_profile_start(
+            home / ".claude" / "projects",
+            sid,
+            str(SAMPLE_RECORD["cwd"]),
+            ts=STARTED_AT_MS + 300,
+            pid=pid,
+            profile=None if owner == "default" else owner,
+            config_dir=None if owner == "default" else str(config),
+        )
+    return sid
+
+
+@pytest.mark.parametrize("layout_home", LAYOUTS, indirect=True)
+def test_every_layout_lists_each_session_once_under_its_owner(layout_home: Path) -> None:
+    for n, owner in enumerate(("default", "personal", "work", "other"), start=1):
+        start_session(layout_home, owner, 4000 + n, n)
+
+    sessions = list_active_sessions(check_liveness=False)
+
+    assert [s.address for s in sessions] == [
+        "default/default-session",
+        "personal/personal-session",
+        "work/work-session",
+        "other/other-session",
+    ]
+    assert find_session("work-session", sessions=sessions).pid == 4003
+    assert find_session("personal/personal-session", sessions=sessions).pid == 4002
+    assert [s.pid for s in list_active_sessions(["work"], check_liveness=False)] == [4003]
+    assert [s.pid for s in list_active_sessions(["other", "personal"], check_liveness=False)] == [4004, 4002]
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_the_start_log_decides_the_owner_in_a_shared_dir(layout_home: Path) -> None:
+    start_session(layout_home, "work", 4242, 1)
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.profile.name == "work"
+    assert session.profile_source == "log"
+    assert session.profile_inferred is False
+    assert list_active_sessions(["personal", "default"], check_liveness=False) == []
+
+
+@pytest.mark.parametrize("layout_home", ["mixed"], indirect=True)
+def test_a_profile_alone_in_its_dir_needs_no_log(layout_home: Path) -> None:
+    start_session(layout_home, "other", 4242, 1, log=False)
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.profile.name == "other"
+    assert session.profile_source == "dir"
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_without_log_or_environ_the_owner_is_inferred(layout_home: Path) -> None:
+    start_session(layout_home, "work", dead_pid(), 1, log=False)
+
+    [session] = list_active_sessions(check_liveness=False)
+    assert session.profile.name == "default"
+    assert session.profile_source == "inferred"
+    assert session.profile_inferred is True
+
+    [session] = list_active_sessions(["work"], check_liveness=False)
+    assert session.profile.name == "work"
+    assert session.profile_inferred is True
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_a_resumed_session_takes_the_newest_start_of_its_own_process(layout_home: Path) -> None:
+    sid = start_session(layout_home, "work", 4242, 1, log=False)
+    projects = layout_home / ".claude" / "projects"
+    cwd = str(SAMPLE_RECORD["cwd"])
+    personal = str(layout_home / ".claude-profiles" / "personal")
+    # An earlier run under personal, and an older process that had the same pid before it was reused.
+    write_profile_start(
+        projects, sid, cwd, ts=STARTED_AT_MS - 3_600_000, pid=1111, profile="personal", config_dir=personal
+    )
+    write_profile_start(
+        projects, sid, cwd, ts=STARTED_AT_MS - 60_000, pid=4242, profile="personal", config_dir=personal
+    )
+    write_profile_start(
+        projects,
+        sid,
+        cwd,
+        ts=STARTED_AT_MS + 200,
+        pid=4242,
+        source="resume",
+        profile="work",
+        config_dir=str(layout_home / ".claude-profiles" / "work"),
+    )
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert (session.profile.name, session.profile_source) == ("work", "log")
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_a_log_line_is_read_before_the_transcript_exists(layout_home: Path) -> None:
+    start_session(layout_home, "other", 4242, 1)
+    assert not any((layout_home / ".claude" / "projects").glob("*/*.jsonl"))
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert (session.profile.name, session.profile_source) == ("other", "log")
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_a_log_naming_a_profile_outside_the_dir_is_ignored(layout_home: Path, tmp_path: Path) -> None:
+    sid = start_session(layout_home, "work", 4242, 1, log=False)
+    write_profile_start(
+        layout_home / ".claude" / "projects",
+        sid,
+        str(SAMPLE_RECORD["cwd"]),
+        ts=STARTED_AT_MS + 200,
+        pid=4242,
+        config_dir=str(tmp_path / "elsewhere"),
+    )
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.profile_source == "inferred"
+
+
+def run_child(env: dict[str, str]) -> subprocess.Popen[bytes]:
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], env=env)
+
+
+@linux_only
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_the_process_environment_decides_without_a_log(layout_home: Path) -> None:
+    work = layout_home / ".claude-profiles" / "work"
+    plain_env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CONFIG_DIR", "FP_CC_AUTH_SWITCH_PROFILE")}
+    with run_child({**plain_env, "CLAUDE_CONFIG_DIR": str(work)}) as in_work, run_child(plain_env) as plain:
+        try:
+            start_session(layout_home, "work", in_work.pid, 1, log=False, record=live_record(in_work.pid))
+            start_session(layout_home, "default", plain.pid, 2, log=False, record=live_record(plain.pid))
+            sessions = list_active_sessions()
+            only_personal = list_active_sessions(["personal"])
+        finally:
+            in_work.kill()
+            plain.kill()
+
+    by_pid = {s.pid: (s.profile.name, s.profile_source) for s in sessions}
+    assert by_pid == {in_work.pid: ("work", "environ"), plain.pid: ("default", "environ")}
+    assert only_personal == []
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_current_session_in_a_shared_dir_is_the_own_profile(layout_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    me = os.getpid()
+    start_session(layout_home, "work", me, 1, log=False, record=live_record(me))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(layout_home / ".claude-profiles" / "work"))
+    monkeypatch.setenv("CLAUDE_PID", str(me))
+
+    session = current_session()
+
+    assert session is not None
+    assert (session.profile.name, session.profile_source) == ("work", "environ")

@@ -106,8 +106,9 @@ def send_message(
 def rename_session(target: MessagingTarget, name: str, *, timeout: float = 5.0) -> None:
     """Ask a running session to rename itself to ``name``.
 
-    The session may still change the name: when another live session in its profile already holds the name, Claude
-    Code gives the newcomer a different one. Read the session's record again to see the result.
+    The session may still change the name: when another live session in its sessions dir already holds the name,
+    Claude Code gives the newcomer a different one. Profiles that share a sessions dir share that check. Read the
+    session's record again to see the result.
 
     Raises:
         The same errors as :func:`send_message`.

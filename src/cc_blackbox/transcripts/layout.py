@@ -8,6 +8,9 @@ Claude Code 2.1.x writes this layout under ``<config dir>/projects/``::
     <slug>/<session id>/tool-results/                  tool output too large to keep in the transcript
     <slug>/memory/                                     the project's auto memory, which belongs to no session
 
+claude-code-auth-switch adds ``<slug>/<session id>/auth-switch-profile-starts.jsonl``, a log of the profile each run of
+the session started under; see :class:`cc_blackbox.ProfileStart`.
+
 ``<slug>`` is :func:`cc_blackbox.project_slug` of the directory the session was launched in. Other tools write files
 next to transcripts too, for example ``<session id>-ftoc.jsonl``, so only a file named by a canonical UUID is a session.
 """
