@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -319,3 +320,40 @@ def test_profile_starts_and_started_by(home: Path, projects: Path) -> None:
     assert [t.session_id for t in list_session_transcripts(started_by=["work"])] == [session_id(1)]
     assert [t.session_id for t in list_session_transcripts(started_by=["default"])] == [session_id(1)]
     assert list_session_transcripts(started_by=["lab"]) == []
+
+
+def test_the_owner_of_a_transcript(home: Path, projects: Path) -> None:
+    (home / ".claude" / "auth-switch.yaml").write_text("profiles:\n  work: {}\n  lab: {}\n", encoding="utf-8")
+    for name in ("work", "lab"):
+        make_profile_dir(home / ".claude-profiles" / name)
+        (home / ".claude-profiles" / name / "projects").symlink_to(projects)
+    lab_dir = home / ".claude-profiles" / "lab"
+    own = make_profile_dir(home / "own") / "projects"
+    own.mkdir()
+    for n in (1, 2, 3):
+        write_transcript(projects, conversation(), session_id=session_id(n))
+    write_transcript(own, conversation(), session_id=session_id(4))
+    # 1 has a start log that names lab, while work's .claude.json says it ended there last.
+    write_profile_start(
+        projects, session_id(1), CWD, ts=1_794_100_000_000, pid=10, profile="lab", config_dir=str(lab_dir)
+    )
+    (home / ".claude-profiles" / "work" / ".claude.json").write_text(
+        json.dumps({"projects": {"/a": {"lastSessionId": session_id(1)}, "/b": {"lastSessionId": session_id(2)}}}),
+        encoding="utf-8",
+    )
+    (home / ".claude.json").write_text("{not json", encoding="utf-8")
+
+    def owner(sid: str, profiles: list[str] | None = None) -> tuple[str, str] | None:
+        found = find_session_transcript(sid).owner(profiles)
+        return (found[0].name, found[1]) if found is not None else None
+
+    assert owner(session_id(1)) == ("lab", "log")
+    assert owner(session_id(2)) == ("work", "claude_json")
+    assert owner(session_id(2), ["lab", "default"]) is None
+    assert owner(session_id(3)) is None
+    own_transcript = find_session_transcript(session_id(4), list_profiles([home / "own"]))
+    found = own_transcript.owner(list_profiles([home / "own"]))
+    assert found is not None and found[1] == "dir"
+
+    assert [t.session_id for t in list_session_transcripts(started_by=["work"])] == [session_id(2)]
+    assert [t.session_id for t in list_session_transcripts(started_by=["lab"])] == [session_id(1)]

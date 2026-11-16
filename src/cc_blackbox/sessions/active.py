@@ -26,6 +26,7 @@ from cc_blackbox.profiles import (
     resolve_profiles,
 )
 from cc_blackbox.sessions._launch import find_transcript_file, read_launch_cwd
+from cc_blackbox.sessions.claude_json import LastSessionIndex
 from cc_blackbox.sessions.liveness import is_session_process_alive
 from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, read_profile_starts, start_of_process
 from cc_blackbox.sessions.registry import RecordFile, read_records
@@ -47,13 +48,16 @@ SessionStatus = Literal["busy", "shell", "idle", "waiting"]
 SessionKind = Literal["interactive", "bg", "daemon", "daemon-worker"]
 """The kinds Claude Code 2.1 writes. :attr:`ActiveSession.kind` keeps any other string as it is."""
 
-ProfileAttribution = Literal["log", "environ", "dir", "inferred"]
-"""How :attr:`ActiveSession.profile` was decided.
+ProfileAttribution = Literal["log", "environ", "claude_json", "dir", "inferred"]
+"""How the profile of a session was decided, from the most to the least reliable source.
 
 ``log`` is the claude-code-auth-switch start log next to the transcript, see :class:`~cc_blackbox.ProfileStart`.
 ``environ`` is the ``CLAUDE_CONFIG_DIR`` of the session process, which the SDK can read only on Linux, or of this
-process for :func:`current_session`. ``dir`` means only one profile uses the sessions dir that holds the record.
-``inferred`` is a guess: several profiles share that sessions dir and nothing else said which of them runs the session.
+process for :func:`current_session`. ``claude_json`` means exactly one candidate profile's ``.claude.json`` names the
+session as the ``lastSessionId`` of a directory, which Claude Code writes when a session ends, so it finds earlier runs
+of a resumed session, not new ones. ``dir`` means only one profile uses the dir that holds the registry record or the
+transcript. ``inferred`` is a guess: several profiles share that dir and nothing else said which of them runs the
+session.
 """
 
 
@@ -229,7 +233,11 @@ def _locate(
 
 
 def _owner(
-    members: Sequence[ClaudeProfile], record: RecordFile, log: Path | None, env: Mapping[str, str] | None
+    members: Sequence[ClaudeProfile],
+    record: RecordFile,
+    log: Path | None,
+    env: Mapping[str, str] | None,
+    last_sessions: LastSessionIndex,
 ) -> tuple[ClaudeProfile, ProfileAttribution]:
     """Return the profile among ``members``, the profiles that share the record's sessions dir, that runs it.
 
@@ -246,7 +254,14 @@ def _owner(
         owner = profile_for_config_dir(env.get("CLAUDE_CONFIG_DIR"), env.get("FP_CC_AUTH_SWITCH_PROFILE"), members)
         if owner is not None:
             return owner, "environ"
-    return members[0], "dir" if len(members) == 1 else "inferred"
+    if len(members) == 1:
+        return members[0], "dir"
+    # Only a shared dir needs .claude.json: in a dir of one profile it could name no other owner.
+    session_id = _str(record.data, "sessionId")
+    owner = last_sessions.owner(session_id, members) if session_id is not None else None
+    if owner is not None:
+        return owner, "claude_json"
+    return members[0], "inferred"
 
 
 def _scratchpad(
@@ -278,6 +293,7 @@ def _to_session(
     env: Mapping[str, str] | None,
     *,
     own_profile: ClaudeProfile | None = None,
+    last_sessions: LastSessionIndex | None = None,
 ) -> ActiveSession:
     """Build the session of ``record``. ``own_profile`` is set for this process's own session, whose environment and
     profile are known."""
@@ -292,7 +308,9 @@ def _to_session(
     started_at_ms = _started_at_ms(record)
     launch_cwd = read_launch_cwd(transcript, started_at_ms) if transcript and started_at_ms is not None else None
     attribution: tuple[ClaudeProfile, ProfileAttribution] = (
-        _owner(members, record, log, env) if own_profile is None else (own_profile, "environ")
+        _owner(members, record, log, env, last_sessions or LastSessionIndex())
+        if own_profile is None
+        else (own_profile, "environ")
     )
     profile, profile_source = attribution
     scratchpad, inferred = _scratchpad(
@@ -378,6 +396,7 @@ def list_active_sessions(
         order.setdefault(profile.config_dir, index)
     oldest = datetime.min.replace(tzinfo=UTC)
     result: list[tuple[int, ActiveSession]] = []
+    last_sessions = LastSessionIndex()
     for members in _sessions_dir_groups(selected, profiles is None):
         searched = list_projects_dirs(members)
         for record in read_records(members[0].sessions_dir):
@@ -386,7 +405,7 @@ def list_active_sessions(
                 continue
             # The environment of a reused pid belongs to another process.
             env = _read_process_environ(record.pid) if alive else None
-            session = _to_session(members, record, searched, env)
+            session = _to_session(members, record, searched, env, last_sessions=last_sessions)
             position = order.get(session.profile.config_dir)
             if position is not None:
                 result.append((position, session))

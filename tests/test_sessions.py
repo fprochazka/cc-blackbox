@@ -595,3 +595,134 @@ def test_current_session_in_a_shared_dir_is_the_own_profile(layout_home: Path, m
 
     assert session is not None
     assert (session.profile.name, session.profile_source) == ("work", "environ")
+
+
+def write_claude_json(home: Path, owner: str, content: dict[str, Any] | str) -> None:
+    """Write the ``.claude.json`` of ``owner``: ``~/.claude.json`` for default, inside the profile dir otherwise."""
+    path = home / ".claude.json" if owner == "default" else home / ".claude-profiles" / owner / ".claude.json"
+    path.write_text(content if isinstance(content, str) else json.dumps(content), encoding="utf-8")
+
+
+def last_session(*session_ids: str) -> dict[str, Any]:
+    return {
+        "numStartups": 3,
+        "projects": {
+            f"/home/user/project-{n}": {"lastSessionId": sid, "lastCost": 0.5} for n, sid in enumerate(session_ids)
+        },
+    }
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_one_claude_json_naming_the_session_decides(layout_home: Path) -> None:
+    sid = start_session(layout_home, "work", dead_pid(), 1, log=False)
+    write_claude_json(layout_home, "work", last_session(session_uuid(9), sid))
+    write_claude_json(layout_home, "personal", last_session(session_uuid(8)))
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert (session.profile.name, session.profile_source) == ("work", "claude_json")
+    assert list_active_sessions(["personal"], check_liveness=False) == []
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_the_default_profile_is_found_through_the_claude_json_next_to_its_dir(layout_home: Path) -> None:
+    sid = start_session(layout_home, "default", dead_pid(), 1, log=False)
+    write_claude_json(layout_home, "default", last_session(sid))
+    (layout_home / ".claude" / ".claude.json").write_text(json.dumps(last_session(session_uuid(9))), encoding="utf-8")
+
+    [session] = list_active_sessions(["work", "default"], check_liveness=False)
+
+    assert (session.profile.name, session.profile_source) == ("default", "claude_json")
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_two_claude_jsons_naming_the_session_decide_nothing(layout_home: Path) -> None:
+    sid = start_session(layout_home, "work", dead_pid(), 1, log=False)
+    write_claude_json(layout_home, "work", last_session(sid))
+    write_claude_json(layout_home, "other", last_session(sid))
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert (session.profile.name, session.profile_source) == ("default", "inferred")
+
+
+@pytest.mark.parametrize("broken", ['{"projects": {"/x": {"lastSess', "[1, 2]", '{"projects": [1]}', ""])
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_a_broken_or_missing_claude_json_is_no_data(layout_home: Path, broken: str) -> None:
+    sid = start_session(layout_home, "work", dead_pid(), 1, log=False)
+    write_claude_json(layout_home, "personal", broken)
+    write_claude_json(layout_home, "work", last_session(sid))  # "other" and "default" have none
+
+    [session] = list_active_sessions(check_liveness=False)
+    assert (session.profile.name, session.profile_source) == ("work", "claude_json")
+
+    write_claude_json(layout_home, "work", broken)
+    [session] = list_active_sessions(check_liveness=False)
+    assert session.profile_source == "inferred"
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_the_start_log_wins_over_claude_json(layout_home: Path) -> None:
+    sid = start_session(layout_home, "personal", 4242, 1)
+    write_claude_json(layout_home, "work", last_session(sid))
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert (session.profile.name, session.profile_source) == ("personal", "log")
+
+
+@linux_only
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_the_process_environment_wins_over_claude_json(layout_home: Path) -> None:
+    work = layout_home / ".claude-profiles" / "work"
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CONFIG_DIR", "FP_CC_AUTH_SWITCH_PROFILE")}
+    with run_child({**env, "CLAUDE_CONFIG_DIR": str(work)}) as child:
+        try:
+            sid = start_session(layout_home, "work", child.pid, 1, log=False, record=live_record(child.pid))
+            write_claude_json(layout_home, "personal", last_session(sid))
+            [session] = list_active_sessions()
+        finally:
+            child.kill()
+
+    assert (session.profile.name, session.profile_source) == ("work", "environ")
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_each_claude_json_is_parsed_at_most_once_per_listing(
+    layout_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_blackbox.sessions import claude_json
+
+    read = claude_json._read_last_session_ids
+    calls: list[Path] = []
+
+    def counting(path: Path) -> frozenset[str]:
+        calls.append(path)
+        return read(path)
+
+    monkeypatch.setattr(claude_json, "_read_last_session_ids", counting)
+    first = start_session(layout_home, "work", 4001, 1, log=False)
+    second = start_session(layout_home, "other", 4002, 2, log=False)
+    write_claude_json(layout_home, "work", last_session(first))
+    write_claude_json(layout_home, "other", last_session(second))
+    start_session(layout_home, "personal", 4003, 3)  # decided by its log
+
+    sessions = list_active_sessions(check_liveness=False)
+
+    assert [(s.profile.name, s.profile_source) for s in sessions] == [
+        ("personal", "log"),
+        ("work", "claude_json"),
+        ("other", "claude_json"),
+    ]
+    assert sorted(calls) == sorted(set(calls))
+    assert len(calls) == 4  # default, personal, work and other, each once
+
+    calls.clear()
+    list_active_sessions(["personal"], check_liveness=False)
+    assert len(calls) == 4  # a new call reads the files again
+
+    calls.clear()
+    (layout_home / ".claude-profiles" / "work" / "sessions" / "4001.json").unlink()
+    (layout_home / ".claude-profiles" / "work" / "sessions" / "4002.json").unlink()
+    list_active_sessions(check_liveness=False)
+    assert calls == []  # the log decided, so no .claude.json was read

@@ -90,6 +90,7 @@ Each profile has a name that is unique in the result and stable across runs. A d
 
 - `log`: the start log that auth-switch's SessionStart hook keeps next to the transcript, matched by pid and start time;
 - `environ`: `CLAUDE_CONFIG_DIR` in the session process's environment, which the library can read only on Linux and only while the process runs;
+- `claude_json`: exactly one of the profiles that share the dir names the session as `projects[<dir>].lastSessionId` in its `.claude.json`. Claude Code writes that value when a session ends, so this finds a resumed session whose earlier run ended under that profile. Each file is read at most once per call, and only when the steps above did not decide. A file that cannot be read or parsed counts as empty;
 - `dir`: only one profile uses the dir;
 - `inferred`: a guess, the first selected profile that shares the dir. `session.profile_inferred` is `True`.
 
@@ -126,7 +127,7 @@ for session in sessions_containing(sessions, ["flaky test"]):
 ```
 
 - **Profiles share transcripts.** Profiles often symlink `projects/` to one directory, so a listing covers each distinct projects dir once and `session.projects_dir.profiles` names every profile that uses it. A transcript does not record which of them wrote it.
-- **Who ran a session.** claude-code-auth-switch can log every start of a session to `<slug>/<session id>/auth-switch-profile-starts.jsonl`. `session.profile_starts()` returns those starts, each with its pid, profile and config dir. A resumed session has one per run, and the runs can belong to different profiles. `list_session_transcripts(started_by=["work"])` keeps the sessions that a profile started or resumed. A session without the log is left out of that filter.
+- **Who ran a session.** claude-code-auth-switch can log every start of a session to `<slug>/<session id>/auth-switch-profile-starts.jsonl`. `session.profile_starts()` returns those starts, each with its pid, profile and config dir. A resumed session has one per run, and the runs can belong to different profiles. `session.owner()` returns the profile that ran the session last and how that was found: the newest start in the log, else exactly one profile's `.claude.json` that names the session, else a projects dir that only one profile uses. `list_session_transcripts(started_by=["work"])` keeps the sessions that a profile started or resumed, and uses the same fallbacks for a session without the log.
 - **Which files are sessions.** Only a file named by a session id, which is a UUID, is a session. Other tools put their own `.jsonl` files next to transcripts, and `session_id_for_path()` maps any file under a projects dir to the session that owns it, or to `None`.
 - **`cwd_within`.** It keeps the sessions launched in a dir or below it, and it reads only the project dirs whose name can belong to such a session. A session stored under a project dir of another name, for example one resumed from elsewhere, is found only by a listing without `cwd_within`.
 - **Symlinked dirs.** Claude Code names the project dir after the launch dir with symlinks resolved, and records that path as `cwd`. `cwd_within` matches a dir under the spelling you pass and under its resolved path. `project_dirs_for(cwd)` returns the project dirs of one dir, the resolved spelling first.

@@ -13,9 +13,10 @@ from typing import Any, Literal
 
 from cc_blackbox.errors import AuthSwitchConfigError, TranscriptNotFound
 from cc_blackbox.paths import project_slug, untruncated_slug
-from cc_blackbox.profiles import ClaudeProfile, profile_for_config_dir, resolve_profiles
+from cc_blackbox.profiles import ClaudeProfile, list_profiles, profile_for_config_dir, resolve_profiles
 from cc_blackbox.sessions._launch import find_transcript_file, project_dirs
-from cc_blackbox.sessions.active import ActiveSession, list_active_sessions
+from cc_blackbox.sessions.active import ActiveSession, ProfileAttribution, list_active_sessions
+from cc_blackbox.sessions.claude_json import LastSessionIndex
 from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, ProfileStart, read_profile_starts
 from cc_blackbox.transcripts.entries import Entry, ReadDiagnostics, parse_entry, parse_timestamp
 from cc_blackbox.transcripts.layout import (
@@ -153,6 +154,31 @@ class SessionTranscript:
         """
         return read_profile_starts(self.sidecar_dir / PROFILE_STARTS_FILE)
 
+    def owner(
+        self, profiles: Iterable[str | ClaudeProfile] | None = None
+    ) -> tuple[ClaudeProfile, ProfileAttribution] | None:
+        """Return the profile that ran the session last, with how it was found, or ``None`` when nothing says.
+
+        ``profiles`` are the candidates and default to :func:`~cc_blackbox.list_profiles`. The sources, in order:
+
+        - ``log``: the newest start in :meth:`profile_starts` whose profile is a candidate;
+        - ``claude_json``: exactly one candidate's ``.claude.json`` names the session as the ``lastSessionId`` of a
+          directory, which Claude Code writes when a session ends;
+        - ``dir``: :attr:`projects_dir` has one profile, and it is a candidate.
+
+        Reads the start log and, without one, every candidate's ``.claude.json``, on every call.
+
+        Raises:
+            ProfileNotFound: a string entry of ``profiles`` names no known profile.
+        """
+        candidates = resolve_profiles(profiles)
+        starts = sorted(self.profile_starts(), key=lambda s: s.started_at_ms, reverse=True)
+        for start in starts:
+            found = start.find_profile(candidates)
+            if found is not None:
+                return found, "log"
+        return _fallback_owner(self, candidates, LastSessionIndex())
+
     def entries(
         self,
         *,
@@ -187,6 +213,19 @@ class SessionTranscript:
         if results.is_dir():
             found.extend(sorted(p for p in results.rglob("*") if p.is_file()))
         return found
+
+
+def _fallback_owner(
+    transcript: SessionTranscript, candidates: Sequence[ClaudeProfile], last_sessions: LastSessionIndex
+) -> tuple[ClaudeProfile, ProfileAttribution] | None:
+    """The owner of a transcript without a usable start log, see :meth:`SessionTranscript.owner`."""
+    found = last_sessions.owner(transcript.session_id, candidates)
+    if found is not None:
+        return found, "claude_json"
+    members = transcript.projects_dir.profiles
+    if len(members) == 1 and any(c.config_dir == members[0].config_dir for c in candidates):
+        return members[0], "dir"
+    return None
 
 
 def _subagent(session_id: str, path: Path) -> SubagentTranscript:
@@ -323,7 +362,10 @@ def list_session_transcripts(
     ``active_since`` skips transcripts not written to since then. Transcripts are append-only, so the mtime is enough.
 
     ``started_by`` keeps sessions that at least one of these profiles started or resumed, according to
-    :meth:`SessionTranscript.profile_starts`. A session without that log is left out, because nothing says who ran it.
+    :meth:`SessionTranscript.profile_starts`. For a session without that log, the owner comes from the profiles'
+    ``.claude.json`` files or from a projects dir that one profile uses, as in :meth:`SessionTranscript.owner`, with
+    every known profile as a candidate. Each ``.claude.json`` is read at most once per call. A session that nothing
+    attributes is left out.
 
     Raises:
         ProfileNotFound: a string entry of ``profiles`` or ``started_by`` names no known profile.
@@ -333,6 +375,8 @@ def list_session_transcripts(
     exact = {project_slug(p) for p in within} if within is not None else set()
     since = active_since.timestamp() if active_since is not None else None
     starters = resolve_profiles(started_by) if started_by is not None else None
+    last_sessions = LastSessionIndex()
+    everyone: list[ClaudeProfile] | None = None
 
     found: list[SessionTranscript] = []
     for projects_dir in list_projects_dirs(profiles, paths=projects_dirs):
@@ -356,15 +400,37 @@ def list_session_transcripts(
                             continue
                     elif not any(_abspath(transcript.cwd).is_relative_to(p) for p in within):
                         continue
-                if starters is not None and not any(
-                    profile_for_config_dir(start.config_dir, start.profile, starters) is not None
-                    for start in transcript.profile_starts()
-                ):
-                    continue
+                if starters is not None:
+                    if everyone is None:
+                        everyone = _all_profiles(starters)
+                    if not _started_by(transcript, starters, everyone, last_sessions):
+                        continue
                 found.append(transcript)
 
     found.sort(key=lambda t: (t.last_activity_at is not None, t.last_activity_at or t.modified_at), reverse=True)
     return found
+
+
+def _all_profiles(extra: Sequence[ClaudeProfile]) -> list[ClaudeProfile]:
+    try:
+        known = list_profiles()
+    except AuthSwitchConfigError:
+        known = []
+    seen = {p.config_dir for p in known}
+    return known + [p for p in extra if p.config_dir not in seen]
+
+
+def _started_by(
+    transcript: SessionTranscript,
+    starters: Sequence[ClaudeProfile],
+    everyone: Sequence[ClaudeProfile],
+    last_sessions: LastSessionIndex,
+) -> bool:
+    starts = transcript.profile_starts()
+    if starts:
+        return any(profile_for_config_dir(s.config_dir, s.profile, starters) is not None for s in starts)
+    owner = _fallback_owner(transcript, everyone, last_sessions)
+    return owner is not None and any(p.config_dir == owner[0].config_dir for p in starters)
 
 
 def find_session_transcript(
