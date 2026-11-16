@@ -257,7 +257,7 @@ __all__ = [
     "transcript_for",
 ]
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 _EXPORTS: dict[str, str] = {
     "SUPPORTED_PEER_PROTOCOLS": "cc_blackbox.compatibility",
