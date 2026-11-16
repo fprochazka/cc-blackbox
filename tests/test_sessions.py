@@ -157,18 +157,29 @@ def test_sessions_are_ordered_by_profile_then_start(profiles: list[ClaudeProfile
         list_active_sessions(["nope"])
 
 
-def test_liveness_drops_dead_and_reused_pids(profiles: list[ClaudeProfile]) -> None:
+def test_liveness_drops_dead_pids(profiles: list[ClaudeProfile]) -> None:
     personal = config_dir(profiles, "personal")
     me = os.getpid()
     write_record(personal, me, live_record(me))
     gone = dead_pid()
     write_record(personal, gone, live_record(me, pid=gone))
-    other_domain = me + 1 if me + 1 != gone else me + 2
-    write_record(personal, other_domain, live_record(me, pid=other_domain, pidDomain="linux:another-host:pid:[1]"))
 
     alive = list_active_sessions()
     assert [s.pid for s in alive] == [me]
-    assert len(list_active_sessions(check_liveness=False)) == 3
+    assert len(list_active_sessions(check_liveness=False)) == 2
+
+
+# Only Linux compares the pid domain. Elsewhere the record is judged by its pid alone, which may be a live process.
+@linux_only
+def test_liveness_drops_records_of_another_pid_domain(profiles: list[ClaudeProfile]) -> None:
+    personal = config_dir(profiles, "personal")
+    me = os.getpid()
+    write_record(personal, me, live_record(me))
+    write_record(personal, me + 1, live_record(me, pid=me + 1, pidDomain="linux:another-host:pid:[1]"))
+
+    alive = list_active_sessions()
+    assert [s.pid for s in alive] == [me]
+    assert len(list_active_sessions(check_liveness=False)) == 2
 
 
 @pytest.mark.parametrize("pid_domain", ["darwin", "linux", "linux:another-host:pid:[1]"])
