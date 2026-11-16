@@ -87,7 +87,6 @@ if TYPE_CHECKING:
         list_session_transcripts,
         read_session_transcript,
         sessions_containing,
-        transcript_for,
     )
     from cc_blackbox.transcripts import (
         KNOWN_ENTRY_TYPES,
@@ -258,7 +257,6 @@ __all__ = [
     "subagent_runs",
     "token_usage",
     "tool_calls",
-    "transcript_for",
 ]
 
 __version__ = "0.7.0"
@@ -329,7 +327,6 @@ _EXPORTS: dict[str, str] = {
     "list_session_transcripts": "cc_blackbox.sessions",
     "read_session_transcript": "cc_blackbox.sessions",
     "sessions_containing": "cc_blackbox.sessions",
-    "transcript_for": "cc_blackbox.sessions",
     "KNOWN_ENTRY_TYPES": "cc_blackbox.transcripts",
     "AssistantEntry": "cc_blackbox.transcripts",
     "AssistantText": "cc_blackbox.transcripts",

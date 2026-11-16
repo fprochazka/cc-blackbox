@@ -20,7 +20,6 @@ from cc_blackbox.sessions.stored import (
     find_session_transcript,
     list_session_transcripts,
     read_session_transcript,
-    transcript_for,
 )
 
 __all__ = [
@@ -42,5 +41,4 @@ __all__ = [
     "list_session_transcripts",
     "read_session_transcript",
     "sessions_containing",
-    "transcript_for",
 ]

@@ -27,13 +27,14 @@ import pytest
 from cc_blackbox import (
     ActiveSession,
     ReadDiagnostics,
+    TranscriptNotFound,
     assistant_texts,
     check_compatibility,
     current_profile,
+    find_session_transcript,
     list_active_sessions,
     prompts,
     send_message,
-    transcript_for,
 )
 from cc_blackbox.paths import env_config_dir, project_slug
 
@@ -173,8 +174,11 @@ def test_headless_session_receives_a_message(workdir: Path) -> None:
 
         assert session.session_id is not None and session.cwd is not None
         expected = session.profile.projects_dir / project_slug(session.cwd) / f"{session.session_id}.jsonl"
-        transcript = transcript_for(session)
-        assert transcript is not None, f"no transcript found for session {session.session_id}, expected {expected}"
+        # The session can be listed before it writes its transcript, and its transcript_path stays as it was then.
+        try:
+            transcript = find_session_transcript(session.session_id, [session.profile], cwd=session.cwd)
+        except TranscriptNotFound:
+            pytest.fail(f"no transcript found for session {session.session_id}, expected {expected}")
         # Profiles often share one projects dir through a symlink; a listing reports the resolved path.
         assert transcript.path == expected.resolve()
         assert marker in json.dumps(results[1]), f"the session did not repeat the marker: {results[1]}"

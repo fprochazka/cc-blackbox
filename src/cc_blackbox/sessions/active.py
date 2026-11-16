@@ -9,11 +9,12 @@ import re
 import sys
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cached_property
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from cc_blackbox.compatibility import Compatibility, check_compatibility
 from cc_blackbox.errors import AmbiguousSession, AuthSwitchConfigError, SessionNotFound
@@ -31,6 +32,9 @@ from cc_blackbox.sessions.liveness import is_session_process_alive
 from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, read_profile_starts, start_of_process
 from cc_blackbox.sessions.registry import RecordFile, read_records
 from cc_blackbox.transcripts.layout import ProjectsDir, is_session_id, list_projects_dirs, project_dirs_for
+
+if TYPE_CHECKING:
+    from cc_blackbox.sessions.stored import SessionTranscript
 
 __all__ = [
     "ActiveSession",
@@ -61,12 +65,15 @@ session.
 """
 
 
-@dataclass(frozen=True, slots=True)
+# Without slots: functools.cached_property keeps its value in the instance __dict__, which slots remove.
+@dataclass(frozen=True)
 class ActiveSession:
     """A Claude Code session whose registry record exists, and whose process runs if liveness was checked.
 
     Every field except ``profile``, ``pid``, ``record_path`` and ``profile_source`` is ``None`` when the record lacks it
     or holds a value of an unexpected type. ``raw`` keeps the whole record for fields the SDK does not model.
+
+    The object is a snapshot of the moment it was listed. :attr:`transcript` is read on first access and kept.
     """
 
     profile: ClaudeProfile
@@ -118,6 +125,29 @@ class ActiveSession:
     record_path: Path
     raw: Mapping[str, Any]
     profile_source: ProfileAttribution = "dir"
+    transcript_path: Path | None = None
+    """The session's main transcript, or ``None`` when the session has no session id or has not written one yet."""
+    _transcript_projects_dir: ProjectsDir | None = field(default=None, repr=False, compare=False)
+
+    @cached_property
+    def transcript(self) -> SessionTranscript | None:
+        """The session's main transcript, read on first access, or ``None`` when :attr:`transcript_path` is ``None``
+        or the file is gone.
+
+        Its ``cached_property`` attributes, such as
+        :attr:`~cc_blackbox.SessionTranscript.last_model_activity_at`, are read on their own first access.
+        """
+        from cc_blackbox.sessions.stored import _summarize
+
+        if self.transcript_path is None:
+            return None
+        projects_dir = self._transcript_projects_dir or ProjectsDir(
+            Path(os.path.realpath(self.transcript_path.parent.parent)), (self.profile,)
+        )
+        try:
+            return _summarize(self.transcript_path, projects_dir)
+        except OSError:
+            return None
 
     @property
     def profile_inferred(self) -> bool:
@@ -215,14 +245,15 @@ def _started_at_ms(record: RecordFile) -> float | None:
 
 def _locate(
     session_id: str | None, cwd: Path | None, searched: Sequence[ProjectsDir]
-) -> tuple[Path | None, Path | None]:
-    """Return the session's transcript and its auth-switch start log, each ``None`` when missing."""
+) -> tuple[tuple[Path, ProjectsDir] | None, Path | None]:
+    """Return the session's transcript with its projects dir, and its auth-switch start log, each ``None`` when
+    missing."""
     if session_id is None or not is_session_id(session_id):
         return None, None
     # The transcript follows /cd, so the record's cwd names its project dir.
     found = find_transcript_file(session_id, searched, cwd)
     if found is not None:
-        return found[0], found[0].with_suffix("") / PROFILE_STARTS_FILE
+        return found, found[0].with_suffix("") / PROFILE_STARTS_FILE
     # A session that has not written its transcript yet can already have the log, which its SessionStart hook writes.
     if cwd is not None and searched:
         for project in project_dirs_for(cwd, projects_dirs=[d.path for d in searched]):
@@ -304,7 +335,8 @@ def _to_session(
     socket_value = _str(data, "messagingSocketPath")
     features = data.get("peerFeatures")
     peer_features = frozenset(f for f in features if isinstance(f, str)) if isinstance(features, list) else frozenset()
-    transcript, log = _locate(session_id, cwd, searched)
+    located, log = _locate(session_id, cwd, searched)
+    transcript = located[0] if located is not None else None
     started_at_ms = _started_at_ms(record)
     launch_cwd = read_launch_cwd(transcript, started_at_ms) if transcript and started_at_ms is not None else None
     attribution: tuple[ClaudeProfile, ProfileAttribution] = (
@@ -340,6 +372,8 @@ def _to_session(
         record_path=record.path,
         raw=MappingProxyType(data),
         profile_source=profile_source,
+        transcript_path=transcript,
+        _transcript_projects_dir=located[1] if located is not None else None,
     )
 
 

@@ -34,7 +34,6 @@ from cc_blackbox import (
     list_profiles,
     list_session_transcripts,
     read_session_transcript,
-    transcript_for,
 )
 from cc_blackbox.sessions.active import list_active_sessions
 
@@ -277,7 +276,8 @@ def test_a_transcript_links_to_its_running_session(home: Path, projects: Path) -
     active = active_session_for(transcript)
 
     assert isinstance(active, ActiveSession) and active.pid == pid
-    assert transcript_for(active) == transcript
+    assert active.transcript_path == transcript.path
+    assert active.transcript == transcript
     assert active_session_for(transcript, sessions=[]) is None
 
 
@@ -285,7 +285,8 @@ def test_a_running_session_without_a_transcript(home: Path, projects: Path) -> N
     pid = os.getpid()
     write_record(home / ".claude", pid, live_record(pid, sessionId=OTHER_SESSION_ID))
     (active,) = list_active_sessions()
-    assert transcript_for(active) is None
+    assert active.transcript_path is None
+    assert active.transcript is None
 
 
 def test_an_assistant_reply_does_not_count_as_a_first_prompt(projects: Path) -> None:

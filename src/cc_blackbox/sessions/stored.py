@@ -40,7 +40,6 @@ __all__ = [
     "find_session_transcript",
     "list_session_transcripts",
     "read_session_transcript",
-    "transcript_for",
 ]
 
 TitleSource = Literal["custom", "ai", "summary", "last-prompt"]
@@ -613,16 +612,6 @@ def read_session_transcript(path: str | os.PathLike[str], projects_dir: Projects
         return _summarize(file, projects_dir)
     except OSError as e:
         raise TranscriptNotFound(f"Cannot read the transcript {file}: {e}") from e
-
-
-def transcript_for(session: ActiveSession) -> SessionTranscript | None:
-    """Return the transcript of a running session, or ``None`` when it has no session id or no transcript yet."""
-    if session.session_id is None:
-        return None
-    try:
-        return find_session_transcript(session.session_id, [session.profile])
-    except TranscriptNotFound:
-        return None
 
 
 def active_session_for(
