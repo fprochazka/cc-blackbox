@@ -29,7 +29,7 @@ from cc_blackbox.profiles import (
 from cc_blackbox.sessions._launch import find_transcript_file, read_launch_cwd
 from cc_blackbox.sessions.claude_json import LastSessionIndex
 from cc_blackbox.sessions.liveness import is_session_process_alive
-from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, read_profile_starts, start_of_process
+from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, ProfileStart, read_profile_starts, start_of_process
 from cc_blackbox.sessions.registry import RecordFile, read_records
 from cc_blackbox.transcripts.layout import ProjectsDir, is_session_id, list_projects_dirs, project_dirs_for
 
@@ -148,6 +148,43 @@ class ActiveSession:
             return _summarize(self.transcript_path, projects_dir)
         except OSError:
             return None
+
+    def profile_starts(self) -> list[ProfileStart]:
+        """Return the starts of :attr:`session_id` that claude-code-auth-switch logged, oldest first, or an empty list.
+
+        Unlike :meth:`SessionTranscript.profile_starts() <cc_blackbox.SessionTranscript.profile_starts>`, it also finds
+        the log of a session that has not written its transcript yet: the start hook writes the log before the first
+        prompt, the transcript only after it. Such a log is looked up in the project dirs of :attr:`cwd` and
+        :attr:`launch_cwd`, which costs a few stats. Reads the log on every call.
+        """
+        log = self._profile_starts_log()
+        return read_profile_starts(log) if log is not None else []
+
+    def process_start(self) -> ProfileStart | None:
+        """Return the start that this session's process logged, from :meth:`profile_starts`, or ``None``.
+
+        It is the newest start of :attr:`pid` that is not older than the process: a resumed session's log holds the
+        starts of earlier processes, and a pid can be reused. A ``/clear`` or an in-process ``/resume`` gives the
+        session another :attr:`session_id`, and the start hook logs that start into the new session's log, so the
+        result is the start of the current session id.
+        """
+        started_at_ms = self.raw.get("startedAt")
+        if isinstance(started_at_ms, bool) or not isinstance(started_at_ms, int | float) or started_at_ms <= 0:
+            started_at_ms = None
+        return start_of_process(self.profile_starts(), self.pid, started_at_ms)
+
+    def _profile_starts_log(self) -> Path | None:
+        if self.session_id is None or not is_session_id(self.session_id):
+            return None
+        # The log sits next to the transcript. A transcript of another session id is stale: the session was cleared.
+        if self.transcript_path is not None and self.transcript_path.stem == self.session_id:
+            return self.transcript_path.with_suffix("") / PROFILE_STARTS_FILE
+        for cwd in dict.fromkeys(d for d in (self.cwd, self.launch_cwd) if d is not None):
+            for project in project_dirs_for(cwd, [self.profile]):
+                log = project / self.session_id / PROFILE_STARTS_FILE
+                if log.is_file():
+                    return log
+        return None
 
     @property
     def profile_inferred(self) -> bool:

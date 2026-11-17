@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -552,6 +553,55 @@ def test_a_log_line_is_read_before_the_transcript_exists(layout_home: Path) -> N
     [session] = list_active_sessions(check_liveness=False)
 
     assert (session.profile.name, session.profile_source) == ("other", "log")
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_the_start_of_the_process_is_read_before_the_transcript_exists(layout_home: Path) -> None:
+    sid = start_session(layout_home, "work", 4242, 1, log=False)
+    projects = layout_home / ".claude" / "projects"
+    cwd = str(SAMPLE_RECORD["cwd"])
+    write_profile_start(projects, sid, cwd, ts=STARTED_AT_MS - 60_000, pid=1111, role="dispatcher")
+    write_profile_start(projects, sid, cwd, ts=STARTED_AT_MS + 200, pid=4242, role="worker")
+    # A later start of another process of the same session id: newest in the log, but not this process.
+    write_profile_start(projects, sid, cwd, ts=STARTED_AT_MS + 9_000, pid=5555, role="reviewer")
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.transcript_path is None
+    assert [s.role for s in session.profile_starts()] == ["dispatcher", "worker", "reviewer"]
+    start = session.process_start()
+    assert start is not None
+    assert (start.pid, start.role) == (4242, "worker")
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_the_start_of_the_process_follows_a_new_session_id(layout_home: Path) -> None:
+    sid = start_session(layout_home, "work", 4242, 1)
+    projects = layout_home / ".claude" / "projects"
+    write_transcript(projects, [user("before the clear")], session_id=sid, cwd=str(SAMPLE_RECORD["cwd"]))
+    [session] = list_active_sessions(check_liveness=False)
+    assert session.transcript_path is not None
+
+    # /clear: the registry record gets a new session id, the process and its startedAt stay.
+    cleared = session_uuid(2)
+    write_profile_start(
+        projects, cleared, str(SAMPLE_RECORD["cwd"]), ts=STARTED_AT_MS + 60_000, pid=4242, source="clear", role="w"
+    )
+    after = replace(session, session_id=cleared)
+
+    start = after.process_start()
+    assert start is not None
+    assert (start.session_id, start.source, start.role) == (cleared, "clear", "w")
+
+
+@pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
+def test_a_session_without_a_start_log_has_no_starts(layout_home: Path) -> None:
+    start_session(layout_home, "work", 4242, 1, log=False)
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert session.profile_starts() == []
+    assert session.process_start() is None
 
 
 @pytest.mark.parametrize("layout_home", ["symlinked"], indirect=True)
