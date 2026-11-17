@@ -5,12 +5,17 @@ Neither a registry record nor a transcript names the config dir its session runs
 start to ``<slug>/<session id>/auth-switch-profile-starts.jsonl``, next to the transcript::
 
     {"v": 1, "ts": <epoch ms>, "session_id": ..., "pid": ..., "source": ...,
-     "profile": ..., "config_dir": ..., "cwd": ...}
+     "profile": ..., "config_dir": ..., "cwd": ...,
+     "role": ..., "role_prompt": ..., "role_prompt_mode": ...}
 
 ``source`` is the SessionStart source: ``startup``, ``resume``, ``clear``, ``compact`` or ``fork``. ``profile`` and
 ``config_dir`` are ``FP_CC_AUTH_SWITCH_PROFILE`` and ``CLAUDE_CONFIG_DIR``, ``null`` when unset. ``pid`` is the
 Claude Code process, the one named by ``sessions/<pid>.json``, or ``null`` when the hook could not find it. A resumed
 session gets a line per run, each with its own pid and possibly another profile.
+
+``role``, ``role_prompt`` and ``role_prompt_mode`` are ``FP_CC_AUTH_SWITCH_ROLE``, ``FP_CC_AUTH_SWITCH_ROLE_PROMPT``
+and ``FP_CC_AUTH_SWITCH_ROLE_PROMPT_MODE``: the auth-switch role the run was started with, the file holding its prompt
+and how that prompt reached the session. Lines written before auth-switch had roles lack them.
 """
 
 from __future__ import annotations
@@ -49,6 +54,13 @@ class ProfileStart:
     config_dir: Path | None
     """``CLAUDE_CONFIG_DIR`` as the process got it, or ``None`` when it was unset, which means ``~/.claude``."""
     cwd: Path | None
+    role: str | None
+    """The auth-switch role the run was started with, or ``None`` when it had none or the line predates roles."""
+    role_prompt: Path | None
+    """The file holding the role's prompt, or ``None`` when the role has no prompt."""
+    role_prompt_mode: str | None
+    """How the role's prompt reached the session: ``append`` or ``replace`` put the file into the system prompt,
+    ``none`` leaves it to a hook to inject."""
     raw: Mapping[str, Any]
 
     def find_profile(self, profiles: Sequence[ClaudeProfile] | None = None) -> ClaudeProfile | None:
@@ -83,7 +95,7 @@ def _parse(line: bytes) -> ProfileStart | None:
         started_at = datetime.fromtimestamp(ts / 1000, tz=UTC)
     except (OverflowError, OSError, ValueError):
         return None
-    config_dir, cwd = _str(data, "config_dir"), _str(data, "cwd")
+    config_dir, cwd, role_prompt = _str(data, "config_dir"), _str(data, "cwd"), _str(data, "role_prompt")
     return ProfileStart(
         started_at=started_at,
         started_at_ms=ts,
@@ -93,6 +105,9 @@ def _parse(line: bytes) -> ProfileStart | None:
         profile=_str(data, "profile"),
         config_dir=Path(config_dir) if config_dir else None,
         cwd=Path(cwd) if cwd else None,
+        role=_str(data, "role"),
+        role_prompt=Path(role_prompt) if role_prompt else None,
+        role_prompt_mode=_str(data, "role_prompt_mode"),
         raw=data,
     )
 

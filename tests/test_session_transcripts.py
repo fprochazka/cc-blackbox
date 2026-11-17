@@ -305,7 +305,17 @@ def test_profile_starts_and_started_by(home: Path, projects: Path) -> None:
     work_dir = str(home / ".claude-profiles" / "work")
     write_transcript(projects, conversation(), session_id=session_id(1))
     write_profile_start(projects, session_id(1), CWD, ts=1_794_100_000_000, pid=10, profile="work", config_dir=work_dir)
-    log = write_profile_start(projects, session_id(1), CWD, ts=1_794_100_900_000, pid=11, source="resume")
+    log = write_profile_start(
+        projects,
+        session_id(1),
+        CWD,
+        ts=1_794_100_900_000,
+        pid=11,
+        source="resume",
+        role="dispatcher",
+        role_prompt="/roles/dispatcher.md",
+        role_prompt_mode="append",
+    )
     with log.open("a", encoding="utf-8") as handle:
         handle.write('{"v": 2, "ts": 1}\nnot json\n{"v": 1, "pid": 12}\n{"v": 1, "ts": 1794100000')
     write_transcript(projects, conversation(), session_id=session_id(2))
@@ -318,6 +328,12 @@ def test_profile_starts_and_started_by(home: Path, projects: Path) -> None:
     owner = first.find_profile()
     assert owner is not None and owner.name == "work"
     assert (second.pid, second.source, second.profile, second.config_dir) == (11, "resume", None, None)
+    assert (first.role, first.role_prompt, first.role_prompt_mode) == (None, None, None)
+    assert (second.role, second.role_prompt, second.role_prompt_mode) == (
+        "dispatcher",
+        Path("/roles/dispatcher.md"),
+        "append",
+    )
     owner = second.find_profile()
     assert owner is not None and owner.name == "default"
     assert find_session_transcript(session_id(2)).profile_starts() == []
