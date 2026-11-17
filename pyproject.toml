@@ -8,16 +8,17 @@ license-files = ["LICENSE"]
 authors = [
     { name = "Filip Procházka", email = "mr@fprochazka.cz" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 keywords = ["claude-code", "claude", "session", "transcript", "messaging", "hooks", "sdk"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
@@ -41,7 +42,7 @@ package = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
@@ -52,7 +53,7 @@ quote-style = "double"
 
 [tool.mypy]
 strict = true
-python_version = "3.11"
+python_version = "3.12"
 files = ["src", "tests"]
 
 [tool.pytest.ini_options]

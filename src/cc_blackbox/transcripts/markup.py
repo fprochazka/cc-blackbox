@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TypeAlias
 
 __all__ = ["ShellCommandPart", "SlashCommandPart", "TextPart", "UserPart", "parse_user_markup"]
 
@@ -45,7 +44,7 @@ class SlashCommandPart:
     args: str | None = None
 
 
-UserPart: TypeAlias = TextPart | ShellCommandPart | SlashCommandPart
+type UserPart = TextPart | ShellCommandPart | SlashCommandPart
 
 # Tags whose entire block (open->content->close) is machine noise that must never
 # be rendered. Empty <bash-stderr></bash-stderr> is handled separately: an empty

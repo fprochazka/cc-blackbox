@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable
-from typing import IO, Any, Literal, NoReturn, TypeAlias, TypeVar, overload
+from typing import IO, Any, Literal, NoReturn, overload
 
 from cc_blackbox.hooks._base import HookInput, HookReply, RawReply, read_hook_input, write_response
 
-FailurePolicy: TypeAlias = Literal["pass", "ask", "block"]
+type FailurePolicy = Literal["pass", "ask", "block"]
 """What a hook does when its handler raises or its input cannot be read.
 
 - ``pass`` prints nothing and exits 1. Claude Code then shows a ``hook error`` notice and goes ahead as if the hook had
@@ -20,9 +20,7 @@ FailurePolicy: TypeAlias = Literal["pass", "ask", "block"]
 - ``ask`` sends PreToolUse and PreModelSwitch to the permission prompt, and does what ``block`` does elsewhere.
 """
 
-_E = TypeVar("_E", bound=HookInput)
-
-_Handler: TypeAlias = Callable[[Any], "HookReply | None"]
+type _Handler = Callable[[Any], "HookReply | None"]
 
 
 @overload
@@ -38,9 +36,9 @@ def handle_hook(
 
 
 @overload
-def handle_hook(
-    *handlers: Callable[[_E], HookReply | None],
-    expect: type[_E],
+def handle_hook[E: HookInput](
+    *handlers: Callable[[E], HookReply | None],
+    expect: type[E],
     on_error: FailurePolicy = "pass",
     name: str | None = None,
     stdin: IO[str] | IO[bytes] | None = None,
@@ -114,9 +112,9 @@ def run_hook(
 
 
 @overload
-def run_hook(
-    *handlers: Callable[[_E], HookReply | None],
-    expect: type[_E],
+def run_hook[E: HookInput](
+    *handlers: Callable[[E], HookReply | None],
+    expect: type[E],
     on_error: FailurePolicy = "pass",
     name: str | None = None,
 ) -> NoReturn: ...

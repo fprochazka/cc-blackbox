@@ -7,7 +7,7 @@ A view is a convenience over ``tool_input``, which always stays available. Impor
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, TypeAlias
+from typing import Any
 
 
 class _View:
@@ -142,7 +142,7 @@ class AgentInput(_View):
     model: str | None
 
 
-ToolInputView: TypeAlias = (
+type ToolInputView = (
     ShellInput
     | ReadInput
     | WriteInput

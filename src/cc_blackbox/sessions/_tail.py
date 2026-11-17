@@ -11,11 +11,9 @@ import json
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 _CHUNK = 64 * 1024
-
-T = TypeVar("T")
 
 
 def _lines_backward(path: Path) -> Iterator[bytes]:
@@ -37,7 +35,7 @@ def _lines_backward(path: Path) -> Iterator[bytes]:
             yield rest
 
 
-def last_record(path: Path, needles: tuple[bytes, ...], pick: Callable[[dict[str, Any]], T | None]) -> T | None:
+def last_record[T](path: Path, needles: tuple[bytes, ...], pick: Callable[[dict[str, Any]], T | None]) -> T | None:
     """Return ``pick`` of the newest record that ``pick`` accepts, or ``None``.
 
     Only lines that contain one of ``needles`` are decoded. An unreadable file counts as one without such a record.

@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any, TypeAlias
+from typing import Any
 
 __all__ = [
     "AssistantEntry",
@@ -134,7 +134,7 @@ class UnknownBlock:
     raw: Mapping[str, Any]
 
 
-ContentBlock: TypeAlias = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock | ImageBlock | UnknownBlock
+type ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock | ImageBlock | UnknownBlock
 
 
 @dataclass(frozen=True, slots=True)

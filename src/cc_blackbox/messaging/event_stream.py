@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from html import escape
-from typing import Any, Generic, Literal, Protocol, TextIO, TypeVar
+from typing import Any, Literal, Protocol, TextIO, TypeVar
 
 from cc_blackbox.errors import (
     ClaudeBlackboxError,
@@ -71,7 +71,6 @@ class StreamEvent(Protocol):
     def to_json(self) -> Mapping[str, Any]: ...
 
 
-E = TypeVar("E", bound=StreamEvent)
 E_contra = TypeVar("E_contra", bound=StreamEvent, contravariant=True)
 
 
@@ -132,7 +131,7 @@ class StdoutEventSink:
 
 
 @dataclass(frozen=True, slots=True)
-class EventEnvelope(Generic[E]):
+class EventEnvelope[E: StreamEvent]:
     """How a batch of events becomes the text of one message.
 
     The message is ``<tag attributes seq="first-last">``, one JSON line per event, and ``</tag>``. ``seq`` is the
@@ -191,7 +190,7 @@ class EventEnvelope(Generic[E]):
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-class MessageEventSink(Generic[E]):
+class MessageEventSink[E: StreamEvent]:
     """The ``claude-message`` stream: batches of events as user messages to one session.
 
     - ``sender`` is the receiver's rate-limit key, for example ``"my-watch:<pid>"``; ``sender_name`` is the name the

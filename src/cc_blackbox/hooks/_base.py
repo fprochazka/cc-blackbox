@@ -12,7 +12,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import IO, TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias, TypedDict
+from typing import IO, TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from cc_blackbox.errors import HookInputError
 
@@ -22,10 +22,10 @@ if TYPE_CHECKING:
     from cc_blackbox.sessions.active import ActiveSession
     from cc_blackbox.sessions.stored import SessionTranscript
 
-PermissionMode: TypeAlias = Literal["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]
+type PermissionMode = Literal["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]
 """The documented ``permission_mode`` values. The field itself is a ``str``, so a new mode is kept, not dropped."""
 
-PermissionDecision: TypeAlias = Literal["allow", "deny", "ask", "defer"]
+type PermissionDecision = Literal["allow", "deny", "ask", "defer"]
 
 EVENT_MODULES: Mapping[str, str] = MappingProxyType(
     {

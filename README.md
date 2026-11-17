@@ -14,7 +14,7 @@ Claude Code does not document any of this except hooks. The library reads the fi
 uv add cc-blackbox
 ```
 
-or `pip install cc-blackbox`. It needs Python 3.11 or newer and depends only on PyYAML.
+or `pip install cc-blackbox`. It needs Python 3.12 or newer and depends only on PyYAML.
 
 To use changes that are not released to PyPI yet, pin a tag of this repository as a git source:
 
@@ -261,7 +261,7 @@ Transcripts carry no protocol number, so their check looks at the records. Pass 
 
 ## Developing
 
-You need [uv](https://docs.astral.sh/uv/) and Python 3.11 or newer. These commands set up the repo and run the checks that CI runs:
+You need [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer. These commands set up the repo and run the checks that CI runs:
 
 ```shell
 uv sync
@@ -271,7 +271,7 @@ uv run mypy
 uv run pytest
 ```
 
-CI runs the same checks on every push to master and on every pull request. It runs the tests on Ubuntu and macOS, each with Python 3.11, 3.12 and 3.13.
+CI runs the same checks on every push to master and on every pull request. It runs the tests on Ubuntu with Python 3.12, 3.13, 3.14 and 3.15, and on macOS with Python 3.12 and 3.15.
 
 The tests build config dirs with anonymised session records and transcripts in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code. macOS limits a Unix socket path to 104 bytes, and a pytest `tmp_path` there is close to that, so a test that opens a socket must put it in the `socket_dir` fixture, a short dir under `/tmp`.
 

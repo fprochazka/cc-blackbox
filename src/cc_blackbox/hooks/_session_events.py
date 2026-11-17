@@ -5,16 +5,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from cc_blackbox.hooks._base import FieldReader, HookInput, HookReply, HookResponse, plain, require
 
 if TYPE_CHECKING:
     from typing import Self
 
-SessionStartSource: TypeAlias = Literal["startup", "resume", "clear", "compact", "fork"]
-SessionEndReason: TypeAlias = Literal["clear", "resume", "logout", "prompt_input_exit", "other"]
-CompactTrigger: TypeAlias = Literal["manual", "auto"]
+type SessionStartSource = Literal["startup", "resume", "clear", "compact", "fork"]
+type SessionEndReason = Literal["clear", "resume", "logout", "prompt_input_exit", "other"]
+type CompactTrigger = Literal["manual", "auto"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
