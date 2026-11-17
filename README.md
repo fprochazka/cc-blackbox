@@ -259,7 +259,9 @@ Transcripts carry no protocol number, so their check looks at the records. Pass 
 - **macOS:** profiles, sessions and messaging use the same code as on Linux. Liveness checks the pid only. When the session's settings files do not set `CLAUDE_CODE_TMPDIR`, the scratchpad path is a guess based on this process's environment, and `scratchpad_dir_inferred` is `True`. This has not yet been checked against a real macOS install.
 - **Windows:** profiles and sessions can be read, but liveness is not checked. Messaging raises `MessagingUnavailable`: Claude Code uses named pipes with a token there, which this version does not implement.
 
-## Development
+## Developing
+
+You need [uv](https://docs.astral.sh/uv/) and Python 3.11 or newer. These commands set up the repo and run the checks that CI runs:
 
 ```shell
 uv sync
@@ -269,9 +271,11 @@ uv run mypy
 uv run pytest
 ```
 
-`uv run pytest -m perf -s` also measures how long a PreToolUse hook built on `run_hook()` takes, against `python -c "import json, dataclasses"`. Run it before a release; wall-clock time on a shared CI runner is too noisy to gate the build on.
+CI runs the same checks on every push to master and on every pull request. It runs the tests on Ubuntu and macOS, each with Python 3.11, 3.12 and 3.13.
 
-The tests build config dirs with anonymised session records and transcripts in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code.
+The tests build config dirs with anonymised session records and transcripts in a temp dir, and check the messaging bytes against a Unix socket server started by the test. They never touch a real Claude Code. macOS limits a Unix socket path to 104 bytes, and a pytest `tmp_path` there is close to that, so a test that opens a socket must put it in the `socket_dir` fixture, a short dir under `/tmp`.
+
+`uv run pytest -m perf -s` also measures how long a PreToolUse hook built on `run_hook()` takes, against `python -c "import json, dataclasses"`. Run it when a change touches the hook path: what `cc_blackbox.hooks` imports, or how it parses a hook's input. CI skips it, because wall-clock time on a shared CI runner is too noisy to gate the build on, and releases do not run it.
 
 ### Commit hooks
 
@@ -284,9 +288,11 @@ git config hooks.forbiddenPatternsFile ~/.config/git/forbidden-patterns.txt  # a
 
 The file holds one extended regex per line, matched case-insensitively; blank lines and `#` comments are ignored. Until `hooks.forbiddenPatternsFile` points at a file with at least one pattern, both hooks refuse every commit and print how to fix it. Tests and docs use generic paths such as `/home/user/project-a`.
 
+A rebase does not run the hooks. After you reword or squash commits in a rebase, check the new messages against the patterns file yourself before you push.
+
 ### Live contract test
 
-The live contract tests check that the installed Claude Code still matches what cc-blackbox expects. Run it after a Claude Code update, and add the version to `TESTED_CLAUDE_CODE_VERSIONS` when it passes:
+The live contract tests check that the installed Claude Code still matches what cc-blackbox expects. Releases do not run them. Run them after a Claude Code update, and when a change touches the socket protocol or the format of the records cc-blackbox reads. When they pass after an update, add the version to `TESTED_CLAUDE_CODE_VERSIONS` in `src/cc_blackbox/compatibility.py`:
 
 ```shell
 uv run pytest -m live -s
@@ -299,6 +305,58 @@ A second test registers a PreToolUse hook built on `run_hook()` through `--setti
 - It needs the `claude` CLI on `PATH`, logged in.
 - It spends model usage: three short turns on `haiku`, about 0.004 USD in total. Set `CC_BLACKBOX_LIVE_MODEL` to use another model.
 - The default `pytest` run and CI skip them.
+
+### Trying a change in a project that uses cc-blackbox
+
+To run another project's tests against an unreleased change, add your checkout to that project's environment for one run, and leave its `uv.lock` unchanged:
+
+```shell
+uv run --frozen --with-editable ../cc-blackbox pytest
+```
+
+Do not commit a path source for cc-blackbox in the other project. Its CI runs `uv sync --locked`, which cannot resolve a path outside the repository. Release cc-blackbox first, then move the other project's pin to the released version.
+
+## Releasing
+
+A release goes to PyPI through GitHub Actions. Pushing a `v*` tag runs `.github/workflows/publish.yml`, which builds the package with `uv build` and publishes it through PyPI trusted publishing, in the `pypi` environment. There is no changelog file: the release notes live in the body of the release commit and in the GitHub release.
+
+Pick the version by the change, within 0.x:
+
+- New public API goes into a minor release, 0.N.0. A fix goes into a patch release, 0.N.M.
+- A breaking change also goes into a minor release. Say what breaks in the release commit and in the release notes. Before you release it, check the projects that use cc-blackbox for calls that would break.
+- Projects that use cc-blackbox pin a range such as `cc-blackbox>=0.8.0,<0.9`. They get a patch release on their next lock update, but a minor release only after they move the pin.
+
+To release version `X.Y.Z`:
+
+1. Make sure master is green and the commits since the last tag hold no private identifiers.
+2. Bump the version in `pyproject.toml`, in `__version__` in `src/cc_blackbox/__init__.py`, and in the pinned `tag = "vX.Y.Z"` in the README's install section. Run `uv lock` to update `uv.lock`.
+3. Commit the four files as `Release X.Y.Z`. In the body, summarize what the release adds and changes, and end with "The README pins vX.Y.Z." Add a `Breaking:` paragraph when something breaks.
+4. Fast-forward master to the commit with `git push origin HEAD:master`, without a pull request. Wait until the CI run of that commit is green: find its id with `gh run list -w ci.yml -L 1`, then run `gh run watch <run id> --exit-status`.
+5. Tag the commit and push only the tag:
+
+   ```shell
+   git tag -a vX.Y.Z -m "cc-blackbox X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+6. Wait for the tag's publish run to succeed: find its id with `gh run list -w publish.yml -L 1`, then run `gh run watch <run id> --exit-status`.
+7. Check that PyPI serves the version: `curl -s https://pypi.org/pypi/cc-blackbox/X.Y.Z/json | jq -r .info.version`. The version-less URL `https://pypi.org/pypi/cc-blackbox/json` can show the previous version for a few minutes.
+8. Write the release notes to a file and create the GitHub release:
+
+   ```shell
+   gh release create vX.Y.Z --verify-tag --latest --title vX.Y.Z --notes-file <notes.md>
+   ```
+
+9. Check that `gh release list` shows `vX.Y.Z` as `Latest`. A release is not done until it does.
+
+The release title is the tag name, without the project name. The notes have this format:
+
+- One sentence that says what the release does for the user, followed by "Unofficial, not affiliated with or endorsed by Anthropic."
+- A code block with `uv add 'cc-blackbox>=X.Y.Z'`.
+- `## Added`, `## Changed`, `## Fixed` and `## Breaking` sections, only those that apply. Each bullet names the API and says what it does or what to change.
+- The line "All changes are additive; existing calls keep working." only when that is true.
+
+If a project that uses cc-blackbox does not see the new version right after the release, refresh uv's cache of it: `uv lock --refresh-package cc-blackbox`.
 
 ## License
 
