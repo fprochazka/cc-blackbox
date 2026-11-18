@@ -19,6 +19,7 @@ from cc_blackbox.sessions._launch import find_transcript_file, project_dirs
 from cc_blackbox.sessions._tail import last_record
 from cc_blackbox.sessions.active import ActiveSession, ProfileAttribution, list_active_sessions
 from cc_blackbox.sessions.claude_json import LastSessionIndex
+from cc_blackbox.sessions.context_window import ContextWindow, read_context_window
 from cc_blackbox.sessions.cost_state import CostState, parse_cost_state
 from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, ProfileStart, read_profile_starts
 from cc_blackbox.transcripts.entries import Entry, ReadDiagnostics, parse_entry, parse_timestamp
@@ -199,6 +200,20 @@ class SessionTranscript:
         for every running session that was never resumed.
         """
         return last_record(self.path, (b'"cost-state"',), parse_cost_state)
+
+    @cached_property
+    def context_window(self) -> ContextWindow | None:
+        """How full the context window was at the newest response of the main conversation, or ``None`` when the
+        session has neither a response nor a compaction.
+
+        After a compaction the session has no measured fill until it answers again: ``used`` is 0 and ``compacted`` is
+        ``True``. The window size comes from the model id; a running session's :attr:`ActiveSession.context_window
+        <cc_blackbox.ActiveSession.context_window>` also applies ``CLAUDE_CODE_DISABLE_1M_CONTEXT``.
+
+        Reads the main transcript backwards from its end to the newest response, and after a compaction on to the
+        response before it. Subagent transcripts are not read: a subagent has a context of its own.
+        """
+        return read_context_window(self.path)
 
     @cached_property
     def name(self) -> str | None:

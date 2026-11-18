@@ -28,6 +28,7 @@ from cc_blackbox.profiles import (
 )
 from cc_blackbox.sessions._launch import find_transcript_file, read_launch_cwd
 from cc_blackbox.sessions.claude_json import LastSessionIndex
+from cc_blackbox.sessions.context_window import ContextWindow
 from cc_blackbox.sessions.liveness import is_session_process_alive
 from cc_blackbox.sessions.profile_starts import PROFILE_STARTS_FILE, ProfileStart, read_profile_starts, start_of_process
 from cc_blackbox.sessions.registry import RecordFile, read_records
@@ -128,6 +129,7 @@ class ActiveSession:
     transcript_path: Path | None = None
     """The session's main transcript, or ``None`` when the session has no session id or has not written one yet."""
     _transcript_projects_dir: ProjectsDir | None = field(default=None, repr=False, compare=False)
+    _process_env: Mapping[str, str] | None = field(default=None, repr=False, compare=False)
 
     @cached_property
     def transcript(self) -> SessionTranscript | None:
@@ -148,6 +150,29 @@ class ActiveSession:
             return _summarize(self.transcript_path, projects_dir)
         except OSError:
             return None
+
+    @cached_property
+    def context_window(self) -> ContextWindow | None:
+        """How full the session's context window is: :attr:`transcript`'s
+        :attr:`~cc_blackbox.SessionTranscript.context_window`, with the session's environment applied.
+
+        ``CLAUDE_CODE_DISABLE_1M_CONTEXT`` set to a true value makes every model's window 200k, and
+        :attr:`~cc_blackbox.ContextWindow.size_source` is then ``env_disable_1m``. The variable is looked up in the
+        ``env`` of the settings files, as for :attr:`scratchpad_dir`, then in the environment the process started with,
+        which the SDK can read only on Linux. A fill above 200k proves the larger window and wins over the variable.
+
+        ``None`` when the session has no transcript, or neither a response nor a compaction in it, as after a
+        ``/clear``.
+        """
+        transcript = self.transcript
+        found = transcript.context_window if transcript is not None else None
+        if found is None or found.size <= _WINDOW_WITHOUT_1M or found.used > _WINDOW_WITHOUT_1M:
+            return found
+        base = self.launch_cwd if self.launch_cwd is not None else self.cwd
+        value = _settings_env_value(self.profile, base, _DISABLE_1M) if base is not None else None
+        if value is None and self._process_env is not None:
+            value = self._process_env.get(_DISABLE_1M)
+        return found.with_size(_WINDOW_WITHOUT_1M, "env_disable_1m") if _is_env_truthy(value) else found
 
     def profile_starts(self) -> list[ProfileStart]:
         """Return the starts of :attr:`session_id` that claude-code-auth-switch logged, oldest first, or an empty list.
@@ -260,7 +285,16 @@ def _settings_env(path: Path, key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _settings_tmpdir(profile: ClaudeProfile, cwd: Path) -> str | None:
+_DISABLE_1M = "CLAUDE_CODE_DISABLE_1M_CONTEXT"
+_WINDOW_WITHOUT_1M = 200_000
+
+
+def _is_env_truthy(value: str | None) -> bool:
+    # The values Claude Code's own check for a boolean environment variable accepts.
+    return value is not None and value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _settings_env_value(profile: ClaudeProfile, cwd: Path, key: str) -> str | None:
     # Claude Code copies the "env" of its settings files into its own environment after it starts, so a value set
     # there is missing from /proc/<pid>/environ. Local project settings win over project settings, which win over
     # the user settings in the config dir. Managed policy settings are not read.
@@ -269,7 +303,7 @@ def _settings_tmpdir(profile: ClaudeProfile, cwd: Path) -> str | None:
         cwd / ".claude" / "settings.json",
         profile.config_dir / "settings.json",
     ):
-        value = _settings_env(path, "CLAUDE_CODE_TMPDIR")
+        value = _settings_env(path, key)
         if value is not None:
             return value
     return None
@@ -348,7 +382,7 @@ def _scratchpad(
     if own_env:
         return scratchpad_dir(base, session_id), launch_cwd is None
     # Claude Code reads the project settings of the dir it starts in, so their env applies to the launch dir.
-    tmpdir = _settings_tmpdir(profile, base)
+    tmpdir = _settings_env_value(profile, base, "CLAUDE_CODE_TMPDIR")
     if tmpdir is None and env is not None:
         tmpdir = env.get("CLAUDE_CODE_TMPDIR") or node_tmpdir(env)
     return scratchpad_dir(base, session_id, tmpdir=tmpdir, uid=record.owner_uid), tmpdir is None or launch_cwd is None
@@ -411,6 +445,8 @@ def _to_session(
         profile_source=profile_source,
         transcript_path=transcript,
         _transcript_projects_dir=located[1] if located is not None else None,
+        # This process inherited its own session's environment, settings env included.
+        _process_env=MappingProxyType(dict(os.environ)) if own_profile is not None else env,
     )
 
 

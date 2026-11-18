@@ -45,23 +45,33 @@ def _lines_backward(path: Path) -> Iterator[bytes]:
             yield rest
 
 
+def records_backward(path: Path, needles: tuple[bytes, ...]) -> Iterator[dict[str, Any]]:
+    """Yield the records of the file at ``path`` that contain one of ``needles``, newest first.
+
+    Only lines that contain a needle are decoded; a line that does not decode to an object is skipped, which covers a
+    line still being written. Raises ``OSError`` when the file cannot be read.
+    """
+    for line in _lines_backward(path):
+        if not any(needle in line for needle in needles):
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            yield record
+
+
 def last_record[T](path: Path, needles: tuple[bytes, ...], pick: Callable[[dict[str, Any]], T | None]) -> T | None:
     """Return ``pick`` of the newest record that ``pick`` accepts, or ``None``.
 
     Only lines that contain one of ``needles`` are decoded. An unreadable file counts as one without such a record.
     """
     try:
-        for line in _lines_backward(path):
-            if not any(needle in line for needle in needles):
-                continue
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(record, dict):
-                found = pick(record)
-                if found is not None:
-                    return found
+        for record in records_backward(path, needles):
+            found = pick(record)
+            if found is not None:
+                return found
     except OSError:
         return None
     return None

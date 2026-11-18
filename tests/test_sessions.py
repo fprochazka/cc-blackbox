@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from records import SAMPLE_RECORD, dead_pid, live_record, make_profile_dir, write_profile_start, write_record
-from transcript_records import BASE_TIME, CWD, envelope, user, write_transcript
+from transcript_records import BASE_TIME, CWD, assistant, envelope, text, user, write_transcript
 
 from cc_blackbox import (
     ActiveSession,
@@ -787,3 +787,57 @@ def test_each_claude_json_is_parsed_at_most_once_per_listing(
     (layout_home / ".claude-profiles" / "work" / "sessions" / "4002.json").unlink()
     list_active_sessions(check_liveness=False)
     assert calls == []  # the log decided, so no .claude.json was read
+
+
+def write_context_transcript(config: Path, *, used: int, model: str = "claude-opus-5") -> None:
+    usage = {"input_tokens": used - 1000, "cache_read_input_tokens": 1000, "output_tokens": 50}
+    records = [
+        envelope("attachment", minutes=-0.005 / 60, attachment={"type": "hook_success"}),
+        user("first prompt", minutes=1),
+        assistant([text("an answer")], minutes=2, model=model, usage=usage),
+    ]
+    write_transcript(config / "projects", records)
+
+
+@linux_only
+def test_the_process_environment_can_disable_the_1m_context_window(profiles: list[ClaudeProfile]) -> None:
+    personal = config_dir(profiles, "personal")
+    write_context_transcript(personal, used=50_000)
+    env = {**os.environ, "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}
+    with subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], env=env) as child:
+        try:
+            write_record(personal, child.pid, live_record(child.pid, startedAt=STARTED_AT_MS))
+            [session] = list_active_sessions()
+        finally:
+            child.kill()
+
+    window = session.context_window
+    assert window is not None
+    assert (window.size, window.size_source, window.used, window.percent) == (200_000, "env_disable_1m", 50_000, 25)
+    assert session.transcript is not None and session.transcript.context_window is not None
+    assert session.transcript.context_window.size == 1_000_000
+
+
+def test_settings_can_disable_the_1m_context_window_unless_the_fill_proves_it(profiles: list[ClaudeProfile]) -> None:
+    personal = config_dir(profiles, "personal")
+    (personal / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_DISABLE_1M_CONTEXT": "true"}}))
+    write_record(personal, 4242, {**SAMPLE_RECORD, "pid": 4242, "startedAt": STARTED_AT_MS})
+
+    write_context_transcript(personal, used=150_000)
+    [session] = list_active_sessions(check_liveness=False)
+    assert session.context_window is not None
+    assert (session.context_window.size_source, session.context_window.percent) == ("env_disable_1m", 75)
+
+    # A fill above 200k shows that the 1M window is in use after all.
+    write_context_transcript(personal, used=250_000)
+    [session] = list_active_sessions(check_liveness=False)
+    assert session.context_window is not None
+    assert (session.context_window.size, session.context_window.size_source) == (1_000_000, "model_table")
+
+
+def test_a_session_without_a_response_has_no_context_window(profiles: list[ClaudeProfile]) -> None:
+    personal = config_dir(profiles, "personal")
+    write_record(personal, 4242, {**SAMPLE_RECORD, "pid": 4242, "startedAt": STARTED_AT_MS})
+    write_launch_transcript(personal)
+    [session] = list_active_sessions(check_liveness=False)
+    assert session.context_window is None

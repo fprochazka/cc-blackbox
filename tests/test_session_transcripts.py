@@ -27,6 +27,7 @@ from transcript_records import (
 
 from cc_blackbox import (
     ActiveSession,
+    ContextWindow,
     TranscriptNotFound,
     UserEntry,
     active_session_for,
@@ -36,6 +37,7 @@ from cc_blackbox import (
     read_session_transcript,
 )
 from cc_blackbox.sessions.active import list_active_sessions
+from cc_blackbox.sessions.context_window import context_window_size
 
 
 @pytest.fixture
@@ -529,3 +531,167 @@ def test_lazy_facts_are_found_in_json_with_spaces(projects: Path) -> None:
     assert transcript.cost_state is not None and transcript.cost_state.total_cost_usd == 0.75
     assert transcript.name == "spaced"
     assert transcript.last_cwd == Path(CWD)
+
+
+def usage(used: int, **extra: object) -> dict[str, object]:
+    """Return a response's usage whose context fill is ``used`` tokens, split over the three counted kinds."""
+    return {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 997,
+        "cache_read_input_tokens": used - 1000,
+        "output_tokens": 400,
+        **extra,
+    }
+
+
+def context_window_of(projects: Path, records: list[dict[str, object]]) -> ContextWindow | None:
+    write_transcript(projects, records)
+    (transcript,) = list_session_transcripts()
+    return transcript.context_window
+
+
+def test_the_context_window_comes_from_the_newest_response(projects: Path) -> None:
+    write_transcript(
+        projects,
+        [
+            user("go", minutes=0),
+            assistant([text("first")], minutes=1, usage=usage(90_000)),
+            assistant([text("second")], minutes=2, usage=usage(312_345), requestedModel="claude-opus-5-5"),
+            bookkeeping("last-prompt"),
+        ],
+    )
+    (transcript,) = list_session_transcripts()
+
+    assert "context_window" not in transcript.__dict__
+    window = transcript.context_window
+    assert window is not None
+    assert (window.size, window.size_source, window.used, window.percent) == (1_000_000, "model_table", 312_345, 31)
+    assert (window.model, window.requested_model, window.response_model) == (
+        "claude-opus-5-5",
+        "claude-opus-5-5",
+        "claude-opus-5",
+    )
+    assert window.compacted is False
+    assert window.measured_at == at(2)
+    assert window.raw["cache_read_input_tokens"] == 311_345
+
+
+def test_a_compaction_after_the_newest_response_empties_the_context_window(projects: Path) -> None:
+    window = context_window_of(
+        projects,
+        [
+            user("go", minutes=0),
+            assistant([text("a")], minutes=1, usage=usage(150_000), model="claude-sonnet-4-5"),
+            system("compact_boundary", minutes=3, compactMetadata={"trigger": "auto", "preTokens": 150_000}),
+            system("compact_boundary", minutes=5, compactMetadata={"trigger": "manual", "preTokens": 20_000}),
+            user("summary of the conversation", minutes=6, isCompactSummary=True),
+        ],
+    )
+
+    assert window is not None
+    assert (window.used, window.percent, window.compacted) == (0, 0, True)
+    # The model of the response before the compaction still gives the size.
+    assert (window.model, window.size, window.size_source) == ("claude-sonnet-4-5", 200_000, "model_table")
+    assert window.measured_at == at(5)
+    assert window.raw == {}
+
+
+def test_a_response_after_a_compaction_measures_the_context_again(projects: Path) -> None:
+    window = context_window_of(
+        projects,
+        [
+            assistant([text("a")], minutes=1, usage=usage(150_000)),
+            system("compact_boundary", minutes=2),
+            assistant([text("b")], minutes=3, usage=usage(40_000)),
+        ],
+    )
+    assert window is not None
+    assert (window.used, window.compacted, window.measured_at) == (40_000, False, at(3))
+
+
+def test_the_context_window_skips_records_that_are_not_responses_of_the_main_conversation(projects: Path) -> None:
+    nested = assistant([text("nested")], minutes=7, usage=usage(900_000))
+    window = context_window_of(
+        projects,
+        [
+            assistant([text("real")], minutes=1, usage=usage(20_000)),
+            assistant([text("API Error")], minutes=2, model="<synthetic>", usage=usage(1000)),
+            assistant([text("side")], minutes=3, usage=usage(500_000), isSidechain=True),
+            assistant([text("free")], minutes=4, usage=usage(500_000), isUnmetered=True),
+            assistant([text("No response requested.")], minutes=5, usage=usage(500_000)),
+            assistant([text("no usage")], minutes=6, usage={}) | {"message": {"model": "claude-opus-5"}},
+            # A progress record embeds whole assistant messages of a running agent.
+            envelope("progress", minutes=7, data={"type": "agent_progress", "message": nested}),
+        ],
+    )
+    assert window is not None
+    assert (window.used, window.measured_at) == (20_000, at(1))
+
+
+def test_the_context_window_counts_the_last_request_of_a_response(projects: Path) -> None:
+    iterations = [
+        {"type": "message", "input_tokens": 1, "cache_read_input_tokens": 50_000, "cache_creation_input_tokens": 0},
+        {"type": "message", "input_tokens": 1, "cache_read_input_tokens": 70_000, "cache_creation_input_tokens": 9},
+        {"type": "advisor_message", "input_tokens": 400_000},
+        {"type": "compaction", "input_tokens": 300_000},
+    ]
+    window = context_window_of(projects, [assistant([text("a")], minutes=1, usage=usage(1000, iterations=iterations))])
+    assert window is not None
+    assert window.used == 70_010
+
+
+def test_the_context_window_is_found_far_from_the_end_and_across_a_long_line(projects: Path) -> None:
+    filler = [bookkeeping("api-request-blob", blob="x" * 50_000) for _ in range(5)]
+    window = context_window_of(
+        projects, [user("go"), assistant([text("y" * 200_000)], minutes=5, usage=usage(60_000)), *filler]
+    )
+    assert window is not None
+    assert (window.used, window.measured_at) == (60_000, at(5))
+
+
+def test_the_context_window_size_follows_the_requested_model_and_the_fill(projects: Path) -> None:
+    tagged = context_window_of(
+        projects,
+        [assistant([text("a")], usage=usage(250_000), model="claude-opus-4-6", requestedModel="claude-opus-4-6[1m]")],
+    )
+    assert tagged is not None
+    assert (tagged.size, tagged.size_source, tagged.percent) == (1_000_000, "model_tag", 25)
+
+    beyond = context_window_of(projects, [assistant([text("a")], usage=usage(250_000), model="claude-sonnet-4-5")])
+    assert beyond is not None
+    assert (beyond.size, beyond.size_source) == (1_000_000, "used_exceeds_table")
+
+
+def test_a_transcript_without_a_response_or_compaction_has_no_context_window(projects: Path) -> None:
+    assert context_window_of(projects, [user("hello"), envelope("progress", data={"type": "hook_progress"})]) is None
+
+    only_boundary = context_window_of(projects, [system("compact_boundary", minutes=2)])
+    assert only_boundary is not None
+    assert (only_boundary.compacted, only_boundary.model, only_boundary.size_source) == (True, None, "default")
+
+
+@pytest.mark.parametrize(
+    ("model", "size", "source"),
+    [
+        ("claude-opus-4-6[1m]", 1_000_000, "model_tag"),  # 1. the [1m] tag, also on an unknown id
+        ("some-gateway-model[1M]", 1_000_000, "model_tag"),
+        ("claude-fable-1", 1_000_000, "model_table"),  # 2. Fable
+        ("claude-opus-5-5", 1_000_000, "model_table"),  # 3. Claude 5 and later
+        ("claude-sonnet-5", 1_000_000, "model_table"),
+        ("claude-haiku-5-5", 1_000_000, "model_table"),
+        ("claude-opus-6", 1_000_000, "model_table"),
+        ("claude-opus-4-7", 1_000_000, "model_table"),  # 4. Opus 4.7 and later
+        ("us.anthropic.claude-opus-4-8", 1_000_000, "model_table"),
+        ("claude-opus-4-6", 200_000, "model_table"),  # 5. 4.6 without the tag
+        ("claude-sonnet-4-6", 200_000, "model_table"),
+        ("claude-mythos-1", 1_000_000, "model_table"),  # 6. Mythos
+        ("claude-sonnet-4-5@20250929", 200_000, "model_table"),  # 7. any other Claude model
+        ("claude-opus-4-20250514", 200_000, "model_table"),
+        ("claude-haiku-4-5-20251001", 200_000, "model_table"),
+        ("claude-3-5-sonnet-20241022", 200_000, "model_table"),
+        ("gpt-5", 200_000, "default"),  # 8. an unknown id
+        (None, 200_000, "default"),
+    ],
+)
+def test_the_window_size_of_each_model_rule(model: str | None, size: int, source: str) -> None:
+    assert context_window_size(model) == (size, source)

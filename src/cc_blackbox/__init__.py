@@ -70,6 +70,8 @@ if TYPE_CHECKING:
     )
     from cc_blackbox.sessions import (
         ActiveSession,
+        ContextWindow,
+        ContextWindowSizeSource,
         CostState,
         ModelUsage,
         ProfileAttribution,
@@ -162,6 +164,8 @@ __all__ = [
     "Compatibility",
     "CompatibilityFeature",
     "ContentBlock",
+    "ContextWindow",
+    "ContextWindowSizeSource",
     "CostState",
     "Entry",
     "Failure",
@@ -310,6 +314,8 @@ _EXPORTS: dict[str, str] = {
     "list_profiles": "cc_blackbox.profiles",
     "read_auth_switch_config": "cc_blackbox.profiles",
     "ActiveSession": "cc_blackbox.sessions",
+    "ContextWindow": "cc_blackbox.sessions",
+    "ContextWindowSizeSource": "cc_blackbox.sessions",
     "CostState": "cc_blackbox.sessions",
     "ModelUsage": "cc_blackbox.sessions",
     "ProfileAttribution": "cc_blackbox.sessions",
