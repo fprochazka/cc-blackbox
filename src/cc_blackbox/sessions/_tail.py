@@ -20,17 +20,27 @@ def _lines_backward(path: Path) -> Iterator[bytes]:
     """Yield the lines of the file at ``path``, last first. A line still being written is yielded as it is."""
     with path.open("rb") as handle:
         position = os.fstat(handle.fileno()).st_size
-        rest = b""
+        # The pieces of a line that started before the chunks read so far, last piece first. They are joined once the
+        # line's start is found, so a line spanning many chunks costs a time linear in its length.
+        pending: list[bytes] = []
         while position > 0:
             step = min(_CHUNK, position)
             position -= step
             handle.seek(position)
-            lines = (handle.read(step) + rest).split(b"\n")
-            # The first piece may be the end of a line that starts in the previous chunk.
-            rest = lines[0]
-            for line in reversed(lines[1:]):
+            chunk = handle.read(step)
+            lines = chunk.split(b"\n")
+            if len(lines) == 1:
+                pending.append(chunk)
+                continue
+            last = lines[-1] + b"".join(reversed(pending))
+            if last.strip():
+                yield last
+            for line in reversed(lines[1:-1]):
                 if line.strip():
                     yield line
+            # The first piece may be the end of a line that starts in an earlier chunk.
+            pending = [lines[0]]
+        rest = b"".join(reversed(pending))
         if rest.strip():
             yield rest
 
