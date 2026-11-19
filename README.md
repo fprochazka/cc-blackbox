@@ -23,7 +23,7 @@ To use changes that are not released to PyPI yet, pin a tag of this repository a
 dependencies = ["cc-blackbox"]
 
 [tool.uv.sources]
-cc-blackbox = { git = "https://github.com/fprochazka/cc-blackbox", tag = "v0.12.0" }
+cc-blackbox = { git = "https://github.com/fprochazka/cc-blackbox", tag = "v0.13.0" }
 ```
 
 ## Usage
