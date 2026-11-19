@@ -35,6 +35,7 @@ from cc_blackbox.sessions.registry import RecordFile, read_records
 from cc_blackbox.transcripts.layout import ProjectsDir, is_session_id, list_projects_dirs, project_dirs_for
 
 if TYPE_CHECKING:
+    from cc_blackbox.rate_limits import RateLimits
     from cc_blackbox.sessions.stored import SessionTranscript
 
 __all__ = [
@@ -173,6 +174,17 @@ class ActiveSession:
         if value is None and self._process_env is not None:
             value = self._process_env.get(_DISABLE_1M)
         return found.with_size(_WINDOW_WITHOUT_1M, "env_disable_1m") if _is_env_truthy(value) else found
+
+    @cached_property
+    def rate_limits(self) -> RateLimits | None:
+        """The rate limits of the account the session runs under: :attr:`profile`'s
+        :meth:`~cc_blackbox.ClaudeProfile.rate_limits`, read on first access.
+
+        They belong to the profile, not to the session: every session of the profile reports into the same file. When
+        several profiles share a sessions dir, the profile may be inferred; see :attr:`profile_source`. The value is a
+        snapshot; :meth:`~cc_blackbox.RateLimitWindow.is_reset` compares with the current time on every call.
+        """
+        return self.profile.rate_limits()
 
     def profile_starts(self) -> list[ProfileStart]:
         """Return the starts of :attr:`session_id` that claude-code-auth-switch logged, oldest first, or an empty list.

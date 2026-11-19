@@ -78,6 +78,30 @@ Each profile has a name that is unique in the result and stable across runs. A d
 - **`~/.claude` is the exception.** With `CLAUDE_CONFIG_DIR` unset, Claude Code keeps its global config in `~/.claude.json`, next to the dir. With `CLAUDE_CONFIG_DIR=~/.claude` it reads `~/.claude/.claude.json` instead. To run under the `default` profile, leave the variable unset.
 - **`CLAUDE_CODE_PROJECT_DIR_NAME`.** When `CLAUDE_CONFIG_DIR` is set, Claude Code names the project dir after this variable instead of the slug, when it holds 1 to 64 letters, digits, `-` or `_`. `find_session_transcript()` still finds such a session by scanning every project dir.
 
+### Rate limits
+
+Claude Code sends an account's rate limits only to the status line command it runs. The launchers of [claude-code-auth-switch](https://github.com/fprochazka/claude-code-auth-switch) put their own status line in front of yours, and it merges the `rate_limits` of every session of the profile into `<config dir>/auth-switch-rate-limits.json`. `profile.rate_limits()`, `read_rate_limits(profile_or_config_dir)` and `active_session.rate_limits` read that file into a `RateLimits`:
+
+```python
+from cc_blackbox import list_profiles
+
+for profile in list_profiles():
+    limits = profile.rate_limits()
+    window = limits.five_hour if limits is not None else None
+    if window is None:
+        continue
+    if window.is_reset():
+        print(f"{profile.name}: reset at {window.resets_at}, was {window.used_percent:.0f}%")
+    else:
+        print(f"{profile.name}: {window.used_percent:.0f}% until {window.resets_at}, measured {window.measured_at}")
+```
+
+- **Windows.** `five_hour` and `seven_day` are the windows of a claude.ai subscription, `spend_limit` the spend limit of a Claude apps gateway, with `used_usd`, `limit_usd` and `period` in its `raw` when Claude Code reported them. `windows` holds every window by name, also ones a newer Claude Code adds. Each `RateLimitWindow` has `used_percent`, `resets_at`, `measured_at` (the last time a session reported the value), `changed_at` and the `session_id` that reported it.
+- **Per account, not per session.** Every session of the profile writes to the same file. Within a window usage only grows, so a session that has been idle for hours, and still reports the values of its last response, cannot lower a value or bring back an older window.
+- **Reset.** `window.is_reset()` tells whether the window's `resets_at` has passed, compared with the current time on every call, so a long-running process can keep the object and ask again; pass a timezone-aware `now` to choose the moment, a naive one raises `ValueError`. `used_percent` of a reset window is the usage from before the reset. The current usage is unknown until a session reports the new window; it is not 0, because the account may have been used elsewhere since. A window without `resets_at` is never reported as reset.
+- **No expiry.** With no session running, the values stay as last observed until their windows reset. They are a lower bound of the account's usage at `measured_at`: other machines and claude.ai use the same account, and this machine's sessions see that only with their next response. The library never drops a value for its age; decide with `measured_at`.
+- **None.** `None` when no session of the profile was started through an auth-switch launcher since it learned to write the file, for an account without subscription limits such as an API key or Vertex AI, and for a file that is not readable JSON or has a format version other than 1. Reads the file on every call, except `active_session.rate_limits`, which is read on first access like the other session attributes. With shared sessions dirs, a session's profile may be inferred; see `profile_source`.
+
 ### Sessions
 
 `list_active_sessions()` reads `<config dir>/sessions/<pid>.json`, which every running session writes, and drops records whose process has ended. Every field except the pid can be `None`, because the record shape changes between Claude Code versions. `session.raw` holds the whole record.

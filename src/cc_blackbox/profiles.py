@@ -14,12 +14,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
 
 from cc_blackbox.errors import AuthSwitchConfigError, ProfileNotFound
 from cc_blackbox.paths import default_config_dir
+
+if TYPE_CHECKING:
+    from cc_blackbox.rate_limits import RateLimits
 
 __all__ = [
     "AuthSwitchConfig",
@@ -93,6 +96,16 @@ class ClaudeProfile:
         if self.config_dir == _realpath(default_config_dir()):
             return Path.home() / ".claude.json"
         return self.config_dir / ".claude.json"
+
+    def rate_limits(self) -> RateLimits | None:
+        """The rate limits of the profile's account, as its sessions started through claude-code-auth-switch measured
+        them, or ``None`` when no such session has reported any.
+
+        See :func:`~cc_blackbox.read_rate_limits`, which this calls. Reads the file on every call.
+        """
+        from cc_blackbox.rate_limits import read_rate_limits
+
+        return read_rate_limits(self.config_dir)
 
 
 @dataclass(frozen=True, slots=True)

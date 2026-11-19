@@ -68,6 +68,12 @@ if TYPE_CHECKING:
         list_profiles,
         read_auth_switch_config,
     )
+    from cc_blackbox.rate_limits import (
+        RATE_LIMITS_FILE,
+        RateLimits,
+        RateLimitWindow,
+        read_rate_limits,
+    )
     from cc_blackbox.sessions import (
         ActiveSession,
         ContextWindow,
@@ -187,7 +193,10 @@ __all__ = [
     "ProjectsDir",
     "Prompt",
     "PromptOrigin",
+    "RATE_LIMITS_FILE",
+    "RateLimitWindow",
     "RateLimitedSender",
+    "RateLimits",
     "ReadDiagnostics",
     "SUPPORTED_PEER_PROTOCOLS",
     "SentMessage",
@@ -251,6 +260,7 @@ __all__ = [
     "prompt_from",
     "prompts",
     "read_auth_switch_config",
+    "read_rate_limits",
     "read_session_transcript",
     "rename_session",
     "scratchpad_dir",
@@ -313,6 +323,10 @@ _EXPORTS: dict[str, str] = {
     "get_profile": "cc_blackbox.profiles",
     "list_profiles": "cc_blackbox.profiles",
     "read_auth_switch_config": "cc_blackbox.profiles",
+    "RATE_LIMITS_FILE": "cc_blackbox.rate_limits",
+    "RateLimitWindow": "cc_blackbox.rate_limits",
+    "RateLimits": "cc_blackbox.rate_limits",
+    "read_rate_limits": "cc_blackbox.rate_limits",
     "ActiveSession": "cc_blackbox.sessions",
     "ContextWindow": "cc_blackbox.sessions",
     "ContextWindowSizeSource": "cc_blackbox.sessions",
