@@ -111,7 +111,8 @@ class ActiveSession:
     peer_protocol: int | None
     peer_features: frozenset[str]
     tmux: str | None
-    """The tmux pane as ``<session>:@<window>.%<pane>``, when the session runs in tmux."""
+    """The tmux pane as ``<session>:@<window>.%<pane>``, when the session runs in tmux. Claude Code writes it once at
+    startup, and the ids exist only on the tmux server the session runs on, see :attr:`tmux_socket`."""
     bridge_session_id: str | None
     scratchpad_dir: Path | None
     """The session's scratchpad dir, under the project slug of :attr:`launch_cwd`. Claude Code keeps the scratchpad of
@@ -129,6 +130,22 @@ class ActiveSession:
     profile_source: ProfileAttribution = "dir"
     transcript_path: Path | None = None
     """The session's main transcript, or ``None`` when the session has no session id or has not written one yet."""
+    tmux_socket: Path | None = None
+    """The socket of the tmux server the session runs on: the first comma-separated field of ``TMUX`` in the
+    environment the session process started with, or in this process's environment for :func:`current_session`.
+
+    Pane ids such as ``%0`` are numbered per tmux server, so the pane in :attr:`tmux` exists only on this server:
+    ``tmux -S <tmux_socket>`` reaches it. ``None`` when the SDK cannot read the process environment (only Linux can,
+    and only for a process of the same user), when ``TMUX`` is not set, or when the field is not an absolute path. A
+    relative path, as ``tmux -S ./name`` gives, is relative to the directory the server was started in, which nobody
+    records."""
+    tmux_server_pid: int | None = None
+    """The pid of the tmux server the session runs on: the second comma-separated field of ``TMUX``, from the same
+    environment as :attr:`tmux_socket`.
+
+    A server restarted on the same socket numbers its panes from ``%0`` again; compare this with the server's
+    ``#{pid}`` to tell the two apart. ``None`` whenever :attr:`tmux_socket` is ``None``, and also, with the socket
+    still set, when the field is missing or not a positive integer."""
     _transcript_projects_dir: ProjectsDir | None = field(default=None, repr=False, compare=False)
     _process_env: Mapping[str, str] | None = field(default=None, repr=False, compare=False)
 
@@ -287,6 +304,22 @@ def _read_process_environ(pid: int) -> dict[str, str] | None:
     return env
 
 
+def _tmux_server(env: Mapping[str, str] | None) -> tuple[Path | None, int | None]:
+    # tmux sets TMUX to "<socket path>,<server pid>,<session index>", and its client takes the socket from the part
+    # before the first comma, as Claude Code does.
+    value = env.get("TMUX") if env is not None else None
+    if not value:
+        return None, None
+    fields = value.split(",")
+    if not os.path.isabs(fields[0]):
+        # Without the socket the server is unknown, and so is what its pid would identify.
+        return None, None
+    socket = Path(fields[0])
+    pid_text = fields[1] if len(fields) > 1 else ""
+    server_pid = int(pid_text) if pid_text.isascii() and pid_text.isdigit() and int(pid_text) > 0 else None
+    return socket, server_pid
+
+
 def _settings_env(path: Path, key: str) -> str | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -431,6 +464,9 @@ def _to_session(
     scratchpad, inferred = _scratchpad(
         profile, record, launch_cwd, cwd, session_id, env, own_env=own_profile is not None
     )
+    # This process inherited its own session's environment, settings env included.
+    process_env = MappingProxyType(dict(os.environ)) if own_profile is not None else env
+    tmux_socket, tmux_server_pid = _tmux_server(process_env)
     return ActiveSession(
         profile=profile,
         pid=record.pid,
@@ -456,9 +492,10 @@ def _to_session(
         raw=MappingProxyType(data),
         profile_source=profile_source,
         transcript_path=transcript,
+        tmux_socket=tmux_socket,
+        tmux_server_pid=tmux_server_pid,
         _transcript_projects_dir=located[1] if located is not None else None,
-        # This process inherited its own session's environment, settings env included.
-        _process_env=MappingProxyType(dict(os.environ)) if own_profile is not None else env,
+        _process_env=process_env,
     )
 
 

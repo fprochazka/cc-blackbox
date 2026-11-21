@@ -230,6 +230,70 @@ def test_scratchpad_uses_the_tmpdir_from_the_target_process_environment(
     )
 
 
+@linux_only
+@pytest.mark.parametrize(
+    ("tmux", "socket", "server_pid"),
+    [
+        ("/tmp/tmux-1000/other,4242,0", Path("/tmp/tmux-1000/other"), 4242),
+        (None, None, None),
+        ("", None, None),
+        ("./relative,4242,0", None, None),
+        ("not a tmux value", None, None),
+        ("/tmp/tmux-1000/other,pid,0", Path("/tmp/tmux-1000/other"), None),
+        ("/tmp/tmux-1000/other,0,0", Path("/tmp/tmux-1000/other"), None),
+    ],
+)
+def test_the_tmux_server_comes_from_the_target_process_environment(
+    profiles: list[ClaudeProfile],
+    monkeypatch: pytest.MonkeyPatch,
+    tmux: str | None,
+    socket: Path | None,
+    server_pid: int | None,
+) -> None:
+    # This process's own TMUX must not leak into another session's values.
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1111,0")
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    if tmux is not None:
+        env["TMUX"] = tmux
+    with subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], env=env) as child:
+        try:
+            write_record(config_dir(profiles, "personal"), child.pid, live_record(child.pid))
+            [session] = list_active_sessions()
+        finally:
+            child.kill()
+
+    assert (session.tmux_socket, session.tmux_server_pid) == (socket, server_pid)
+
+
+@linux_only
+def test_the_tmux_server_is_unknown_without_the_process_environment(
+    profiles: list[ClaudeProfile], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1111,0")
+    # A process that has ended has no environment to read.
+    pid = dead_pid()
+    write_record(config_dir(profiles, "personal"), pid, {**SAMPLE_RECORD, "pid": pid})
+
+    [session] = list_active_sessions(check_liveness=False)
+
+    assert (session.tmux_socket, session.tmux_server_pid) == (None, None)
+
+
+def test_current_session_reads_the_tmux_server_from_this_process(
+    profiles: list[ClaudeProfile], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    me = os.getpid()
+    write_record(config_dir(profiles, "default"), me, live_record(me))
+    monkeypatch.setenv("CLAUDE_PID", str(me))
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/other,4242,3")
+
+    session = current_session()
+
+    assert session is not None
+    assert (session.tmux_socket, session.tmux_server_pid) == (Path("/tmp/tmux-1000/other"), 4242)
+    assert replace(session, tmux_server_pid=None).tmux_server_pid is None
+
+
 def make_sessions(profiles: list[ClaudeProfile]) -> list[ActiveSession]:
     personal, work = config_dir(profiles, "personal"), config_dir(profiles, "work")
     write_record(personal, 11, {**SAMPLE_RECORD, "pid": 11, "sessionId": "aaaa1111-0000", "name": "Release Notes"})

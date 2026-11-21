@@ -71,6 +71,8 @@ def test_type_checkers_see_the_real_types() -> None:
     # assert_type is a no-op at run time; mypy --strict fails this file if a name were typed as Any.
     def check(session: ActiveSession, transcript: SessionTranscript, event: PreToolUseInput) -> None:
         assert_type(session.pid, int)
+        assert_type(session.tmux_socket, Path | None)
+        assert_type(session.tmux_server_pid, int | None)
         assert_type(transcript.session_id, str)
         assert_type(event.tool_use_id, str | None)
         assert_type(PreToolUseReply.deny("x"), PreToolUseReply)

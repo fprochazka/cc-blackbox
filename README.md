@@ -120,6 +120,8 @@ for profile in list_profiles():
 
 A session that runs under a profile you did not select is left out, even when its record sits in a selected profile's dir.
 
+`tmux` is the session's tmux pane as Claude Code recorded it at startup, such as `main:@1.%4`. Pane, window and session ids are numbered per tmux server, so a session started on its own server (`tmux -L <name>`) can record `%0` while the default server has a `%0` of its own. `tmux_socket` is the socket of the server the session runs on, and `tmux_server_pid` that server's pid, which tells a server restarted on the same socket apart: pass `-S <tmux_socket>` to reach the pane. Both come from `TMUX` in the session process's environment, so both are `None` when that cannot be read (outside Linux, a process of another user), without `TMUX`, or for a socket path that is not absolute. `tmux_server_pid` alone is `None` when the socket is known but the pid field does not parse.
+
 `scratchpad_dir` is the session's scratchpad directory, which Claude Code derives from the launch directory and keeps after `/cd`. Claude Code creates it on first use, so it may not exist yet. When the session has written no transcript record yet, `launch_cwd` is `None`, the scratchpad is derived from `cwd`, and `scratchpad_dir_inferred` is `True`.
 
 ### Messages
@@ -281,8 +283,8 @@ Transcripts carry no protocol number, so their check looks at the records. Pass 
 
 ### Platform support
 
-- **Linux:** everything works. Liveness checks compare the process start time, which catches reused pids. The scratchpad path uses the temp dir from the session's settings files or its process environment.
-- **macOS:** profiles, sessions and messaging use the same code as on Linux. Liveness checks the pid only. When the session's settings files do not set `CLAUDE_CODE_TMPDIR`, the scratchpad path is a guess based on this process's environment, and `scratchpad_dir_inferred` is `True`. This has not yet been checked against a real macOS install.
+- **Linux:** everything works. Liveness checks compare the process start time, which catches reused pids. The scratchpad path uses the temp dir from the session's settings files or its process environment. `tmux_socket` and `tmux_server_pid`, the tmux server a session runs on, come from `TMUX` in its process environment.
+- **macOS:** profiles, sessions and messaging use the same code as on Linux. Liveness checks the pid only. When the session's settings files do not set `CLAUDE_CODE_TMPDIR`, the scratchpad path is a guess based on this process's environment, and `scratchpad_dir_inferred` is `True`. `tmux_socket` and `tmux_server_pid` are `None`, except for `current_session()`. This has not yet been checked against a real macOS install.
 - **Windows:** profiles and sessions can be read, but liveness is not checked. Messaging raises `MessagingUnavailable`: Claude Code uses named pipes with a token there, which this version does not implement.
 
 ## Developing
