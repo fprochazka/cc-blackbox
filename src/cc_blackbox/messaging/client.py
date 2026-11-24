@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -55,6 +56,29 @@ def _socket_path(target: MessagingTarget) -> str:
     return os.fspath(target.messaging_socket)
 
 
+def _child_auth_line(socket_path: str) -> bytes:
+    """The auth line a child process of the receiving session may send first, or nothing.
+
+    Claude Code exports ``CLAUDE_CODE_MESSAGING_TOKEN`` and ``CLAUDE_CODE_MESSAGING_SOCKET`` to the processes it
+    starts. A process that posts to that session's own socket may send ``{"type":"auth","token":...}`` as the first
+    line to prove it is the session's child. The token goes only to the socket it came with, never to another session.
+    """
+    token = os.environ.get("CLAUDE_CODE_MESSAGING_TOKEN")
+    own_socket = os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
+    if not token or not own_socket or not _same_socket(socket_path, own_socket):
+        return b""
+    return json.dumps({"type": "auth", "token": token}, separators=(",", ":")).encode() + b"\n"
+
+
+def _same_socket(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def send_message(
     target: MessagingTarget,
     content: str,
@@ -74,7 +98,14 @@ def send_message(
     - drop it when ``sender`` exceeds 30 messages in a burst or 1 message per 2 seconds sustained,
     - drop it when the same content arrived within the last 30 seconds, so put a sequence number or time into it,
     - drop it when 50 messages already wait in its queue,
-    - hold it until the user approves it, which a session in bypass-permissions mode does by default.
+    - hold it until the user approves it, which a session in bypass-permissions mode does by default for a sender it
+      cannot verify as its own child process.
+
+    When ``target`` is the socket of the session this process runs under (``CLAUDE_CODE_MESSAGING_SOCKET``) and
+    ``CLAUDE_CODE_MESSAGING_TOKEN`` is set, the frame is preceded by the documented auth line that proves the sender
+    is the session's child. On Linux Claude Code decides that from the process tree and ignores the token; on macOS
+    the token counts when the process check finds no evidence; in a container where Claude Code runs as PID 1 the
+    token is the only evidence. It is no signed identity, and it is never sent to another session.
 
     ``sender`` goes into the frame's ``from`` field. The model never sees it; the receiver uses it as the key of its
     rate limit and duplicate check, so give every independent sending process its own label. With ``sender_name``,
@@ -98,7 +129,7 @@ def send_message(
     if sender_name is not None:
         content = build_envelope(content, from_address=f"did:{percent_encode_address(sender)}", from_name=sender_name)
     frame = build_user_frame(content, sender=sender, priority=priority, msg_id=msg_id)
-    payload = encode_frame(frame)
+    payload = _child_auth_line(socket_path) + encode_frame(frame)
     default_transport().send(socket_path, payload, timeout=timeout)
     return SentMessage(msg_id=frame["msg_id"], socket_path=socket_path, bytes_written=len(payload))
 
@@ -114,7 +145,8 @@ def rename_session(target: MessagingTarget, name: str, *, timeout: float = 5.0) 
         The same errors as :func:`send_message`.
     """
     socket_path = _socket_path(target)
-    default_transport().send(socket_path, encode_frame(build_rename_frame(name)), timeout=timeout)
+    payload = _child_auth_line(socket_path) + encode_frame(build_rename_frame(name))
+    default_transport().send(socket_path, payload, timeout=timeout)
 
 
 @dataclass(slots=True)
