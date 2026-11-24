@@ -120,6 +120,82 @@ def test_send_message_with_sender_name_wraps_the_envelope(receiver: FakeReceiver
     )
 
 
+TOKEN = "0123456789abcdef0123456789abcdef"
+FRAME_LINE = (
+    b'{"type":"user","from":"ci-watcher","priority":"next","msg_id":"3f2b8c1e-5a6d-4e7f-8a9b-0c1d2e3f4a5b",'
+    b'"message":{"role":"user","content":"Pipeline #12 failed"}}\n'
+)
+
+
+def test_send_message_to_its_own_session_sends_the_child_token_first(
+    receiver: FakeReceiver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", str(receiver.path))
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", TOKEN)
+
+    sent = send_message(receiver.path, "Pipeline #12 failed", sender="ci-watcher", msg_id=MSG_ID)
+
+    [data] = receiver.wait()
+    assert data == b'{"type":"auth","token":"' + TOKEN.encode() + b'"}\n' + FRAME_LINE
+    assert sent.bytes_written == len(data)
+
+
+@pytest.mark.parametrize("token", [None, ""])
+def test_send_message_without_a_token_sends_only_the_frame(
+    receiver: FakeReceiver, monkeypatch: pytest.MonkeyPatch, token: str | None
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", str(receiver.path))
+    if token is not None:
+        monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", token)
+
+    send_message(receiver.path, "Pipeline #12 failed", sender="ci-watcher", msg_id=MSG_ID)
+
+    [data] = receiver.wait()
+    assert data == FRAME_LINE
+
+
+def test_send_message_never_sends_the_token_to_another_session(
+    receiver: FakeReceiver, monkeypatch: pytest.MonkeyPatch, socket_dir: Path
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", str(socket_dir / "1111.sock"))
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", TOKEN)
+
+    send_message(receiver.path, "Pipeline #12 failed", sender="ci-watcher", msg_id=MSG_ID)
+
+    [data] = receiver.wait()
+    assert data == FRAME_LINE
+    assert TOKEN.encode() not in data
+
+
+def test_send_message_matches_its_own_socket_through_a_symlink(
+    receiver: FakeReceiver, monkeypatch: pytest.MonkeyPatch, socket_dir: Path
+) -> None:
+    link = socket_dir / "link.sock"
+    link.symlink_to(receiver.path)
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", str(link))
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", TOKEN)
+
+    send_message(receiver.path, "Pipeline #12 failed", sender="ci-watcher", msg_id=MSG_ID)
+
+    [data] = receiver.wait()
+    assert data.startswith(b'{"type":"auth","token":"' + TOKEN.encode() + b'"}\n')
+
+
+def test_rename_session_of_its_own_session_sends_the_child_token_first(
+    receiver: FakeReceiver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", str(receiver.path))
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", TOKEN)
+
+    rename_session(receiver.path, "release-train")
+
+    [data] = receiver.wait()
+    assert data == (
+        b'{"type":"auth","token":"' + TOKEN.encode() + b'"}\n'
+        b'{"type":"control","action":"rename","name":"release-train"}\n'
+    )
+
+
 def test_rename_session_writes_a_control_frame(receiver: FakeReceiver) -> None:
     rename_session(receiver.path, "release-train")
     [data] = receiver.wait()

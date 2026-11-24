@@ -26,10 +26,12 @@ class Transport(Protocol):
 
 
 class UnixSocketTransport:
-    """The Linux and macOS transport: a Unix stream socket per session, with no authentication.
+    """The Linux and macOS transport: a Unix stream socket per session, where authentication is optional.
 
     Only filesystem permissions protect the socket (a ``0700`` dir and a ``0600`` socket), so any process of the same
-    user can write to it. The receiver closes a connection that sends no complete line within 30 seconds.
+    user can write to it. An auth line, when the caller puts one first in ``payload``, only proves that the sender is
+    the receiving session's own child process. The receiver closes a connection that sends no complete line within 30
+    seconds.
     """
 
     def send(self, address: str, payload: bytes, *, timeout: float) -> None:
