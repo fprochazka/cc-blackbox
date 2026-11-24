@@ -273,7 +273,7 @@ __all__ = [
     "tool_calls",
 ]
 
-__version__ = "0.14.0"
+__version__ = "0.14.1"
 
 _EXPORTS: dict[str, str] = {
     "SUPPORTED_PEER_PROTOCOLS": "cc_blackbox.compatibility",
