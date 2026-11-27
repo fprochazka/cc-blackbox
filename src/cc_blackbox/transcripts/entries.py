@@ -190,6 +190,13 @@ class UserEntry(Entry):
     """The record-level ``toolUseResult``: structured tool output the model never sees."""
     tool_denial: str | None
     """``toolDenialKind``, for example ``user-rejected``, when a tool call was denied."""
+    turn_origin: str | None = None
+    """``turnOrigin``: what started the turn, set on the record that opens it. ``human``, ``peer``, ``scheduled`` for a
+    cron or a wakeup, ``task_notification``, ``sdk`` for a prompt of a headless or SDK session, or ``system``. Unlike
+    ``origin``, it is also set on a scheduled or SDK prompt, which has no ``origin``. Older transcripts lack it."""
+    wakeup_source: str | None = None
+    """``wakeupSource``: which wakeup fired a scheduled prompt, for example ``schedule_wakeup``. ``None`` for a cron
+    fire."""
 
     @property
     def plain_text(self) -> str:
@@ -357,6 +364,8 @@ def parse_entry(
             is_compact_summary=data.get("isCompactSummary") is True,
             tool_use_result=data.get("toolUseResult"),
             tool_denial=_str(data, "toolDenialKind"),
+            turn_origin=_str(data, "turnOrigin"),
+            wakeup_source=_str(data, "wakeupSource"),
         )
 
     if record_type == "assistant":

@@ -83,6 +83,42 @@ def test_records_become_typed_entries(tmp_path: Path) -> None:
     assert title.raw["aiTitle"] == "Module walkthrough"
 
 
+def test_a_prompt_records_what_started_its_turn_and_which_wakeup_fired(tmp_path: Path) -> None:
+    path = write(
+        tmp_path,
+        user("Explain the module.", minutes=0, turnOrigin="human"),
+        user("A message from another session.", minutes=1, origin="peer", isMeta=True, turnOrigin="peer"),
+        # A wakeup the session scheduled for itself: no origin, only turnOrigin and wakeupSource.
+        user(
+            "Check whether the build finished.",
+            minutes=2,
+            origin=None,
+            isMeta=True,
+            promptSource="system",
+            turnOrigin="scheduled",
+            wakeupSource="schedule_wakeup",
+        ),
+        # A cron fire is scheduled too, but names no wakeup.
+        user("Run the nightly check.", minutes=3, origin=None, isMeta=True, turnOrigin="scheduled"),
+        user("<task-notification/>", minutes=4, origin="task-notification", turnOrigin="task_notification"),
+        # Older transcripts lack both fields, and a malformed value reads as missing.
+        user("Explain it again.", minutes=5),
+        user("Explain it once more.", minutes=6, turnOrigin=1, wakeupSource=""),
+    )
+
+    found = [(e.origin, e.turn_origin, e.wakeup_source) for e in iter_entries(path) if isinstance(e, UserEntry)]
+
+    assert found == [
+        ("human", "human", None),
+        ("peer", "peer", None),
+        (None, "scheduled", "schedule_wakeup"),
+        (None, "scheduled", None),
+        ("task-notification", "task_notification", None),
+        ("human", None, None),
+        ("human", None, None),
+    ]
+
+
 def test_offsets_let_a_reader_continue_where_it_stopped(tmp_path: Path) -> None:
     path = write(tmp_path, user("one"), user("two"))
     first = next(iter_entries(path))
