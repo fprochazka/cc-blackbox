@@ -41,6 +41,7 @@ __all__ = [
     "SubagentRun",
     "Thinking",
     "ToolCall",
+    "ToolPermissionDecision",
     "UsageTotals",
     "assistant_texts",
     "compactions",
@@ -84,6 +85,33 @@ class Thinking:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolPermissionDecision:
+    """How Claude Code decided whether a tool call may run, from the ``permissionDecision`` of its result record.
+
+    Claude Code from about 2.1.294 records one on nearly every tool result; 2.1.289 and older record none. Every field
+    is the raw string Claude Code wrote, or ``None`` when the record lacks it.
+    """
+
+    decision: str | None
+    """``accept`` or ``reject``."""
+    source: str | None
+    """Who decided: ``config`` for allow rules, the permission mode and the auto mode classifier, ``hook`` for a
+    PreToolUse hook, ``user_temporary`` when the user approved a prompt or answered a dialog such as AskUserQuestion,
+    ``user_permanent`` when the user approved a prompt and saved the rule as an allow rule, ``user_reject`` when the
+    user rejected it."""
+    reason_type: str | None
+    """For example ``classifier``, ``rule``, ``mode`` or ``hook``."""
+    reason_code: str | None
+    """For example ``classifier:auto-mode:unavailable`` or ``hook:PreToolUse``."""
+    grant_scope: str | None
+    """For a user's approval: ``once`` or ``session``."""
+    classifier_category: str | None
+    """For an auto mode classifier denial: the category of the denied action."""
+    rule_source: str | None = None
+    """For a decision by an allow or deny rule: the settings file that holds it, for example ``userSettings``."""
+
+
+@dataclass(frozen=True, slots=True)
 class ToolCall:
     """A tool call joined with its result."""
 
@@ -99,6 +127,19 @@ class ToolCall:
     timestamp: datetime | None
     uuid: str | None
     """The uuid of the assistant record that made the call."""
+    result_timestamp: datetime | None = None
+    """When the record that carried the result was written: the end of the call. ``None`` without a result.
+
+    ``timestamp`` is when the call's block streamed, a lower bound of its start. The calls of one response can overlap:
+    Claude Code can start a call while the response still streams and runs concurrency-safe tools, such as Read, Grep
+    or Agent, in parallel. A call of a tool that is not concurrency-safe, such as Bash, Edit or Write, may also have
+    waited for the calls before it.
+    """
+    permission_decision: ToolPermissionDecision | None = None
+    """How the call's permission was decided. ``None`` without a result, and on transcripts of older Claude Code."""
+    request_ref: str | None = None
+    """The ``requestRef`` of the assistant record: the API request whose response made the call. The calls of one
+    response share it, and it equals the ``id`` of that request's ``api-request`` record when the transcript has one."""
 
     @property
     def is_error(self) -> bool:
@@ -219,6 +260,23 @@ def _call(entry: AssistantEntry, block: ToolUseBlock, results: Mapping[str, _Res
         denial=found.entry.tool_denial if found else None,
         timestamp=entry.timestamp,
         uuid=entry.uuid,
+        result_timestamp=found.entry.timestamp if found else None,
+        permission_decision=_permission_decision(found.entry.raw.get("permissionDecision")) if found else None,
+        request_ref=_str(entry.raw, "requestRef"),
+    )
+
+
+def _permission_decision(value: Any) -> ToolPermissionDecision | None:
+    if not isinstance(value, Mapping):
+        return None
+    return ToolPermissionDecision(
+        decision=_str(value, "decision"),
+        source=_str(value, "source"),
+        reason_type=_str(value, "reasonType"),
+        reason_code=_str(value, "reasonCode"),
+        grant_scope=_str(value, "grantScope"),
+        classifier_category=_str(value, "classifierCategory"),
+        rule_source=_str(value, "ruleSource"),
     )
 
 

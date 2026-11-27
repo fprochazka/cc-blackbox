@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from transcript_records import (
+    BASE_TIME,
     assistant,
     attachment,
     jsonl,
@@ -23,6 +26,7 @@ from cc_blackbox import (
     Prompt,
     SubagentRun,
     Thinking,
+    ToolPermissionDecision,
     UsageTotals,
     assistant_texts,
     compactions,
@@ -85,6 +89,99 @@ def test_tool_calls_are_joined_with_their_results(tmp_path: Path) -> None:
         ("Bash", None, False),
     ]
     assert found[0].input == {"command": "ls"}
+
+
+def test_a_tool_call_carries_when_its_result_arrived_and_its_request(tmp_path: Path) -> None:
+    found = list(
+        tool_calls(
+            entries(
+                tmp_path,
+                assistant([tool_use("toolu_1", "Bash", command="make test")], minutes=1, requestRef="req-ref-1"),
+                assistant([tool_use("toolu_2", "Read", file_path="/a")], minutes=1.5, requestRef="req-ref-1"),
+                result_record(
+                    "toolu_1",
+                    "ok",
+                    minutes=4,
+                    permissionDecision={"decision": "accept", "source": "config", "reasonType": "classifier"},
+                ),
+                assistant([tool_use("toolu_3", "Bash", command="sleep 60")], minutes=5, message_id="msg_02"),
+            )
+        )
+    )
+    assert [(c.id, c.request_ref, c.timestamp, c.result_timestamp) for c in found] == [
+        ("toolu_1", "req-ref-1", BASE_TIME + timedelta(minutes=1), BASE_TIME + timedelta(minutes=4)),
+        ("toolu_2", "req-ref-1", BASE_TIME + timedelta(minutes=1.5), None),
+        ("toolu_3", None, BASE_TIME + timedelta(minutes=5), None),
+    ]
+    assert found[0].permission_decision == ToolPermissionDecision("accept", "config", "classifier", None, None, None)
+    # A call without a result has no permission decision, and neither has an older transcript without the field.
+    assert found[1].permission_decision is None
+    assert found[2].permission_decision is None
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected"),
+    [
+        (
+            {"decision": "accept", "source": "config", "reasonType": "rule", "ruleSource": "userSettings"},
+            ToolPermissionDecision("accept", "config", "rule", None, None, None, rule_source="userSettings"),
+        ),
+        (
+            {"decision": "reject", "source": "hook", "reasonType": "hook", "reasonCode": "hook:PreToolUse"},
+            ToolPermissionDecision("reject", "hook", "hook", "hook:PreToolUse", None, None),
+        ),
+        (
+            {"decision": "accept", "source": "user_temporary", "grantScope": "once", "reasonCode": "no-rule-match"},
+            ToolPermissionDecision("accept", "user_temporary", None, "no-rule-match", "once", None),
+        ),
+        (
+            {"decision": "accept", "source": "user_permanent", "reasonType": "rule", "ruleSource": "userSettings"},
+            ToolPermissionDecision("accept", "user_permanent", "rule", None, None, None, rule_source="userSettings"),
+        ),
+        (
+            {"decision": "reject", "source": "user_reject"},
+            ToolPermissionDecision("reject", "user_reject", None, None, None, None),
+        ),
+        (
+            {
+                "decision": "reject",
+                "source": "config",
+                "reasonType": "classifier",
+                "reasonCode": "classifier:auto-mode",
+                "classifierCategory": "destructive-action",
+            },
+            ToolPermissionDecision(
+                "reject", "config", "classifier", "classifier:auto-mode", None, "destructive-action"
+            ),
+        ),
+        (
+            {"decision": 1, "source": ["config"], "grantScope": ""},
+            ToolPermissionDecision(None, None, None, None, None, None),
+        ),
+        ("accept", None),
+    ],
+    ids=[
+        "config-rule",
+        "hook",
+        "user-temporary",
+        "user-permanent",
+        "user-reject",
+        "classifier",
+        "malformed-fields",
+        "not-a-mapping",
+    ],
+)
+def test_a_tool_call_carries_how_its_permission_was_decided(
+    tmp_path: Path, recorded: Any, expected: ToolPermissionDecision | None
+) -> None:
+    (call,) = tool_calls(
+        entries(
+            tmp_path,
+            assistant([tool_use("toolu_1", "Bash", command="ls")], minutes=1),
+            result_record("toolu_1", "a", minutes=2, permissionDecision=recorded),
+        )
+    )
+    assert call.permission_decision == expected
 
 
 def test_subagent_runs_link_to_their_transcripts(tmp_path: Path) -> None:
