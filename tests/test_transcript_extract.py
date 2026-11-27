@@ -325,8 +325,8 @@ def test_compactions_carry_their_summary(tmp_path: Path) -> None:
         ("manual", 120000, True),
         ("auto", None, False),
     ]
-    # Older Claude Code records neither the preserved segment nor the tokens after the compaction.
-    assert [(c.preserved_head_uuid, c.post_tokens) for c in found] == [(None, None), (None, None)]
+    # Older Claude Code records neither the preserved segment, the tokens after the compaction, nor its duration.
+    assert [(c.preserved_head_uuid, c.post_tokens, c.duration_ms) for c in found] == [(None, None, None)] * 2
 
 
 def test_a_compaction_names_the_head_of_the_preserved_segment(tmp_path: Path) -> None:
@@ -341,6 +341,7 @@ def test_a_compaction_names_the_head_of_the_preserved_segment(tmp_path: Path) ->
             "trigger": "auto",
             "preTokens": 180_000,
             "postTokens": 24_000,
+            "durationMs": 61_250,
             "preservedSegment": {
                 "headUuid": kept["uuid"],
                 "anchorUuid": "summary-uuid",
@@ -358,7 +359,7 @@ def test_a_compaction_names_the_head_of_the_preserved_segment(tmp_path: Path) ->
     [found] = compactions(entries(tmp_path, user("start"), kept, kept_reply, boundary, summary))
     assert found.uuid == boundary["uuid"]
     assert found.preserved_head_uuid == kept["uuid"]
-    assert (found.trigger, found.pre_tokens, found.post_tokens) == ("auto", 180_000, 24_000)
+    assert (found.trigger, found.pre_tokens, found.post_tokens, found.duration_ms) == ("auto", 180_000, 24_000, 61_250)
     assert found.summary is not None and found.summary.startswith("This session is being continued")
 
 
@@ -372,12 +373,13 @@ def test_a_malformed_preserved_segment_or_token_count_is_left_out(tmp_path: Path
                     "trigger": "manual",
                     "preTokens": True,
                     "postTokens": "24000",
+                    "durationMs": 1.5,
                     "preservedSegment": {"headUuid": ""},
                 },
             ),
         )
     )
-    assert (found.pre_tokens, found.post_tokens, found.preserved_head_uuid) == (None, None, None)
+    assert (found.pre_tokens, found.post_tokens, found.duration_ms, found.preserved_head_uuid) == (None,) * 4
 
 
 def test_assistant_texts_and_queued_prompts(tmp_path: Path) -> None:

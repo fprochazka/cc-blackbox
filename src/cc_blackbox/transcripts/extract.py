@@ -223,6 +223,14 @@ class Compaction:
     """
     post_tokens: int | None = None
     """The context's tokens right after the compaction. ``None`` for a transcript of an older Claude Code."""
+    duration_ms: int | None = None
+    """How long the compaction took, in milliseconds.
+
+    A compaction that took about a second or more made the session wait, for seconds to minutes, whether it was manual
+    or auto. Claude Code also compacts in the background, for example an idle session before the prompt cache expires,
+    and can answer a manual ``/compact`` with a summary it already had (``compactMetadata.precomputed``); those take
+    tens of milliseconds and were no wait. ``None`` when the record lacks it.
+    """
 
 
 @dataclass(slots=True)
@@ -428,6 +436,7 @@ def compactions(entries: Iterable[Entry]) -> Iterator[Compaction]:
             uuid=boundary.uuid,
             preserved_head_uuid=_str(preserved, "headUuid") if isinstance(preserved, Mapping) else None,
             post_tokens=_int(meta, "postTokens"),
+            duration_ms=_int(meta, "durationMs"),
         )
 
     for entry in entries:
