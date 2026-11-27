@@ -167,9 +167,21 @@ class Compaction:
     trigger: str | None
     """``manual`` or ``auto``."""
     pre_tokens: int | None
+    """The context's tokens before the compaction."""
     summary: str | None
+    """The summary that replaced the conversation, or ``None`` when no summary record follows the boundary."""
     timestamp: datetime | None
     uuid: str | None
+    """The uuid of the ``compact_boundary`` record."""
+    preserved_head_uuid: str | None = None
+    """The uuid of the oldest record Claude Code kept verbatim in the context after the compaction.
+
+    Claude Code from about 2.1.266 keeps the last stretch of the conversation next to the summary. Those records stay
+    where they are, before the boundary record, and are not written again: the stretch runs from this record to the
+    boundary. ``None`` for a transcript of an older Claude Code, which kept only the summary.
+    """
+    post_tokens: int | None = None
+    """The context's tokens right after the compaction. ``None`` for a transcript of an older Claude Code."""
 
 
 @dataclass(slots=True)
@@ -213,6 +225,11 @@ def _call(entry: AssistantEntry, block: ToolUseBlock, results: Mapping[str, _Res
 def _str(data: Mapping[str, Any], key: str) -> str | None:
     value = data.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _int(data: Mapping[str, Any], key: str) -> int | None:
+    value = data.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def assistant_texts(entries: Iterable[Entry]) -> Iterator[AssistantText]:
@@ -344,13 +361,15 @@ def compactions(entries: Iterable[Entry]) -> Iterator[Compaction]:
     def build(boundary: SystemEntry, summary: str | None) -> Compaction:
         meta = boundary.raw.get("compactMetadata")
         meta = meta if isinstance(meta, Mapping) else {}
-        tokens = meta.get("preTokens")
+        preserved = meta.get("preservedSegment")
         return Compaction(
             trigger=_str(meta, "trigger"),
-            pre_tokens=tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else None,
+            pre_tokens=_int(meta, "preTokens"),
             summary=summary,
             timestamp=boundary.timestamp,
             uuid=boundary.uuid,
+            preserved_head_uuid=_str(preserved, "headUuid") if isinstance(preserved, Mapping) else None,
+            post_tokens=_int(meta, "postTokens"),
         )
 
     for entry in entries:
